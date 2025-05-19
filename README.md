@@ -72,6 +72,11 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+### iff building wheels for mpi4py became problematic, trz
+```bash
+sudo apt install libopenmpi-dev
+```
+
 
 ### Step 2: Run the Test Script
 
@@ -98,7 +103,7 @@ This will:
 In a separate terminal, run:
 
 ```bash
-# On Linux/macOS:
+# On wsl/Linux/macOS:
 mpirun -n 5 python simple_prediction_service.py
 
 # On Windows:
