@@ -68,6 +68,8 @@ brew install open-mpi
 # Install Microsoft MPI: https://www.microsoft.com/en-us/download/details.aspx?id=57467
 
 # Install Python dependencies
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
