@@ -154,16 +154,50 @@ def load_model(model_path):
 def preprocess_transaction(transaction):
     """
     Preprocess transaction data for the model.
-    This function should extract and format the features needed by the model.
+    This function extracts and formats the features needed by the model.
     """
     # Extract relevant features from the transaction
-    # This will depend on your specific model requirements
-    # For demonstration, we'll assume the model expects these features
     try:
+        # For a real fraud detection model, we would extract all relevant features
+        # For this implementation, we'll use a simplified set of features that should work with the model
+        # The exact features would depend on what the model was trained on
+        
+        # Convert amount to float (this is typically an important feature for fraud detection)
+        amount = float(transaction.get('amount', 0))
+        
+        # Extract customer and vendor information
+        # We'll convert these to numeric features since most ML models require numeric input
+        customer_id = transaction.get('customer_id', '')
+        vendor_id = transaction.get('vendor_id', '')
+        
+        # Extract customer ID number if it's in format 'CUST_1234'
+        customer_id_num = 0
+        if isinstance(customer_id, str) and '_' in customer_id:
+            try:
+                customer_id_num = int(customer_id.split('_')[1])
+            except (IndexError, ValueError):
+                customer_id_num = hash(customer_id) % 10000  # Fallback to hash
+        elif isinstance(customer_id, str):
+            customer_id_num = hash(customer_id) % 10000
+            
+        # Extract vendor ID number if it's in format 'VENDOR_123'
+        vendor_id_num = 0
+        if isinstance(vendor_id, str) and '_' in vendor_id:
+            try:
+                vendor_id_num = int(vendor_id.split('_')[1])
+            except (IndexError, ValueError):
+                vendor_id_num = hash(vendor_id) % 1000  # Fallback to hash
+        elif isinstance(vendor_id, str):
+            vendor_id_num = hash(vendor_id) % 1000
+        
+        # Create feature dictionary
         features = {
-            'amount': float(transaction.get('amount', 0)),
-            'customer_id': str(transaction.get('customer_id', '')),
-            'vendor_id': str(transaction.get('vendor_id', ''))
+            'amount': amount,
+            'customer_id_num': customer_id_num,
+            'vendor_id_num': vendor_id_num,
+            # Add derived features that might help with fraud detection
+            'amount_log': np.log1p(amount) if amount > 0 else 0,
+            'amount_bin': min(int(amount / 100), 9)  # Bin amount into 10 categories
         }
         
         # Convert to DataFrame for model input
@@ -260,36 +294,49 @@ def main():
             transactions = []
             logger.info(f"Attempting to read up to {num_workers} transactions")
             
-            for _ in range(num_workers):
-                # Pull message from transaction queue
+            # Try to get at least one transaction (blocking if necessary)
+            first_message = None
+            while first_message is None:
+                first_message = queue_client.pull_message(CONFIG["transaction_queue"])
+                if first_message is None:
+                    logger.info("Queue is empty, waiting for a transaction...")
+                    time.sleep(2)  # Wait before trying again
+            
+            # Add the first message to our transactions list
+            transactions.append(first_message)
+            
+            # Try to get more transactions up to num_workers (non-blocking)
+            for _ in range(num_workers - 1):
                 message = queue_client.pull_message(CONFIG["transaction_queue"])
                 if message:
                     transactions.append(message)
-                
-            # If no transactions were found, wait and try again
-            if not transactions:
-                logger.info("No transactions available, waiting 5 seconds...")
-                time.sleep(5)
-                continue
+                else:
+                    # No more messages available, proceed with what we have
+                    break
+            
+            logger.info(f"Retrieved {len(transactions)} transactions (out of {num_workers} workers)")
                 
             logger.info(f"Processing {len(transactions)} transactions")
             
             # Distribute transactions to workers
+            active_workers = min(len(transactions), num_workers)
+            logger.info(f"Using {active_workers} workers for {len(transactions)} transactions")
+            
             for i, transaction in enumerate(transactions):
                 # Send to worker (use worker_id = i + 1 since rank 0 is the master)
-                worker_id = (i % num_workers) + 1
+                worker_id = (i % active_workers) + 1
                 if worker_id < size:  # Ensure we don't exceed available processes
                     comm.send(transaction, dest=worker_id)
                     logger.info(f"Sent transaction {transaction.get('transaction_id', 'unknown')} to worker {worker_id}")
             
-            # Send None to signal end of batch
-            for worker_id in range(1, num_workers + 1):
+            # Send None to signal end of batch, but only to workers that received transactions
+            for worker_id in range(1, active_workers + 1):
                 if worker_id < size:
                     comm.send(None, dest=worker_id)
             
             # Collect results from workers
             for i in range(len(transactions)):
-                worker_id = (i % num_workers) + 1
+                worker_id = (i % active_workers) + 1
                 if worker_id < size:
                     prediction_result = comm.recv(source=worker_id)
                     logger.info(f"Received result from worker {worker_id}")

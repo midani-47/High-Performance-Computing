@@ -33,6 +33,8 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 ```
 /
 ├── prediction_service.py     # Main MPI-based prediction service
+├── web_ui.py                # Web interface for testing
+├── test_service.py          # Command-line test script
 ├── requirements.txt          # Python dependencies
 ├── .env                      # Environment configuration
 ├── start_service.sh          # Shell script to start the service
@@ -100,6 +102,34 @@ The service can be configured through environment variables or the `.env` file:
 3. Start the prediction service using one of the methods above
 4. Push transaction messages to the transaction queue
 5. The service will automatically process transactions and push predictions to the results queue
+
+### Web UI for Testing
+
+A web-based user interface is provided for easy testing of the prediction service:
+
+```bash
+# Start the web UI
+python web_ui.py
+```
+
+Then open http://localhost:7600 in your browser. The web UI allows you to:
+
+- Check the status of the queue service and queues
+- Create the required queues if they don't exist
+- Push sample transactions to the transaction queue
+- View prediction results from the results queue
+
+### Command-line Testing
+
+You can also test the service using the included test script:
+
+```bash
+# Run the test script to create queues and push sample transactions
+python test_service.py
+
+# Check for results after the service has processed transactions
+python test_service.py --check-only
+```
 
 See [DOCUMENTATION.md](DOCUMENTATION.md) for more detailed information about the implementation and usage of this service.
 
