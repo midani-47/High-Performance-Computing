@@ -308,10 +308,14 @@ def index():
                               queue_service_status=queue_service_status)
     
     queues = admin_client.list_queues()
+    logger.info(f"Found queues: {queues}")
     
     # Check if required queues exist
     transaction_queue_exists = any(q.get('name') == CONFIG['transaction_queue'] for q in queues)
     results_queue_exists = any(q.get('name') == CONFIG['results_queue'] for q in queues)
+    
+    logger.info(f"Looking for transaction queue: {CONFIG['transaction_queue']}, exists: {transaction_queue_exists}")
+    logger.info(f"Looking for results queue: {CONFIG['results_queue']}, exists: {results_queue_exists}")
     
     # Get queue sizes if they exist
     transaction_queue_size = 0
