@@ -70,15 +70,17 @@ class QueueServiceClient:
     def authenticate(self):
         """Authenticate with the queue service."""
         try:
-            # The queue service expects simple form parameters, not OAuth2 format
+            # The FastAPI endpoint expects query parameters (not form or JSON data)
             response = requests.post(
                 f"{self.base_url}/token",
-                data={
+                params={
                     "username": self.auth["username"],
                     "password": self.auth["password"]
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
+                }
             )
+                
+            if response.status_code == 422:
+                logger.warning(f"FastAPI validation error: {response.text}")
                 
             response.raise_for_status()
             auth_data = response.json()
