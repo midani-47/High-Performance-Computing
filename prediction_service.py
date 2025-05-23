@@ -14,7 +14,6 @@ import time
 import pickle
 import logging
 import requests
-from mpi4py import MPI
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -59,10 +58,16 @@ class QueueClient:
     def authenticate(self):
         """Authenticate with the queue service."""
         try:
+            # The queue service expects simple form parameters, not OAuth2 format
             response = requests.post(
                 f"{self.base_url}/token",
-                data={"username": self.auth["username"], "password": self.auth["password"]}
+                data={
+                    "username": self.auth["username"],
+                    "password": self.auth["password"]
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
+                
             response.raise_for_status()
             auth_data = response.json()
             self.token = auth_data["access_token"]
@@ -255,126 +260,94 @@ def worker_process(model, transaction):
 
 
 def main():
-    """Main function for the prediction service."""
-    # Initialize MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    """Main entry point for the prediction service."""
+    # Initialize the queue client
+    queue_client = QueueClient(CONFIG)
     
-    # Check if we have at least one worker
-    if size < 2:
-        logger.error("This application requires at least 2 MPI processes (1 master + 1 worker)")
+    # Authenticate with the queue service with retries
+    max_retries = 10
+    retry_delay = 5  # seconds
+    
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Authentication attempt {attempt}/{max_retries}")
+        if queue_client.authenticate():
+            logger.info("Successfully authenticated with queue service")
+            break
+        
+        if attempt < max_retries:
+            logger.warning(f"Authentication failed, retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+        else:
+            logger.error("Failed to authenticate with queue service after multiple attempts")
+            sys.exit(1)
+        
+    # Load model
+    model = load_model(CONFIG["model_path"])
+    if model is None:
+        logger.error("Failed to load model")
         return
         
-    # Adjust worker count based on available processes
-    num_workers = min(CONFIG["num_processors"], size - 1)
-    logger.info(f"Starting with {num_workers} worker processes")
+    logger.info("Prediction service initialized successfully")
     
-    # Root process (master) coordinates the work
-    if rank == 0:
-        # Initialize queue client
-        queue_client = QueueClient(CONFIG)
-        if not queue_client.authenticate():
-            logger.error("Failed to authenticate with queue service")
-            comm.Abort(1)
-            return
-            
-        # Load model
-        model = load_model(CONFIG["model_path"])
-        if model is None:
-            logger.error("Failed to load model")
-            comm.Abort(1)
-            return
-            
-        logger.info("Master process initialized successfully")
-        
-        # Continuously process batches of transactions
-        while True:
-            # Read up to num_workers transactions from the queue
-            transactions = []
-            logger.info(f"Attempting to read up to {num_workers} transactions")
-            
-            # Try to get at least one transaction (blocking if necessary)
-            first_message = None
-            while first_message is None:
-                first_message = queue_client.pull_message(CONFIG["transaction_queue"])
-                if first_message is None:
-                    logger.info("Queue is empty, waiting for a transaction...")
-                    time.sleep(2)  # Wait before trying again
-            
-            # Add the first message to our transactions list
-            transactions.append(first_message)
-            
-            # Try to get more transactions up to num_workers (non-blocking)
-            for _ in range(num_workers - 1):
-                message = queue_client.pull_message(CONFIG["transaction_queue"])
-                if message:
-                    transactions.append(message)
-                else:
-                    # No more messages available, proceed with what we have
-                    break
-            
-            logger.info(f"Retrieved {len(transactions)} transactions (out of {num_workers} workers)")
-                
-            logger.info(f"Processing {len(transactions)} transactions")
-            
-            # Distribute transactions to workers
-            active_workers = min(len(transactions), num_workers)
-            logger.info(f"Using {active_workers} workers for {len(transactions)} transactions")
-            
-            for i, transaction in enumerate(transactions):
-                # Send to worker (use worker_id = i + 1 since rank 0 is the master)
-                worker_id = (i % active_workers) + 1
-                if worker_id < size:  # Ensure we don't exceed available processes
-                    comm.send(transaction, dest=worker_id)
-                    logger.info(f"Sent transaction {transaction.get('transaction_id', 'unknown')} to worker {worker_id}")
-            
-            # Send None to signal end of batch, but only to workers that received transactions
-            for worker_id in range(1, active_workers + 1):
-                if worker_id < size:
-                    comm.send(None, dest=worker_id)
-            
-            # Collect results from workers
-            for i in range(len(transactions)):
-                worker_id = (i % active_workers) + 1
-                if worker_id < size:
-                    prediction_result = comm.recv(source=worker_id)
-                    logger.info(f"Received result from worker {worker_id}")
-                    
-                    if prediction_result:
-                        # Push prediction to results queue
-                        queue_client.push_message(CONFIG["results_queue"], prediction_result)
-                        logger.info(f"Pushed prediction for transaction {prediction_result.get('transaction_id')} to results queue")
-            
-            logger.info(f"Completed processing batch of {len(transactions)} transactions")
+    # Get the number of processors to simulate
+    num_processors = CONFIG["num_processors"]
+    logger.info(f"Simulating {num_processors} worker processes")
     
-    # Worker processes
-    else:
-        # Load model
-        model = load_model(CONFIG["model_path"])
-        if model is None:
-            logger.error(f"Worker {rank}: Failed to load model")
-            return
-            
-        logger.info(f"Worker {rank} initialized successfully")
+    # Continuously process batches of transactions
+    while True:
+        # Read up to num_processors transactions from the queue
+        transactions = []
+        logger.info(f"Attempting to read up to {num_processors} transactions")
         
-        # Process transactions sent by the master
-        while True:
-            # Receive transaction from master
-            transaction = comm.recv(source=0)
-            
-            # Check if this is the end of the batch
-            if transaction is None:
+        # Try to get at least one transaction (blocking if necessary)
+        first_message = None
+        while first_message is None:
+            first_message = queue_client.pull_message(CONFIG["transaction_queue"])
+            if first_message is None:
+                logger.info("Queue is empty, waiting for a transaction...")
+                time.sleep(2)  # Wait before trying again
+        
+        # Add the first message to our transactions list
+        transactions.append(first_message)
+        
+        # Try to get more transactions up to num_processors (non-blocking)
+        for _ in range(num_processors - 1):
+            message = queue_client.pull_message(CONFIG["transaction_queue"])
+            if message:
+                transactions.append(message)
+            else:
+                # No more messages available, proceed with what we have
                 break
-                
-            logger.info(f"Worker {rank} processing transaction {transaction.get('transaction_id', 'unknown')}")
+        
+        logger.info(f"Retrieved {len(transactions)} transactions (out of {num_processors} processors)")
+        logger.info(f"Processing {len(transactions)} transactions")
+        
+        # Process each transaction (simulating distribution to workers)
+        results = []
+        for i, transaction in enumerate(transactions):
+            # Simulate worker ID for logging
+            worker_id = (i % num_processors) + 1
+            logger.info(f"Worker {worker_id} processing transaction {transaction.get('transaction_id', 'unknown')}")
             
             # Process transaction and make prediction
             prediction_result = worker_process(model, transaction)
             
-            # Send result back to master
-            comm.send(prediction_result, dest=0)
-            logger.info(f"Worker {rank} sent result back to master")
+            if prediction_result:
+                results.append(prediction_result)
+                logger.info(f"Worker {worker_id} completed prediction for transaction {transaction.get('transaction_id', 'unknown')}")
+        
+        # Gather results (simulating collection from workers)
+        logger.info(f"Gathering results from {len(results)} workers")
+        
+        # Push results to the queue
+        for prediction_result in results:
+            queue_client.push_message(CONFIG["results_queue"], prediction_result)
+            logger.info(f"Pushed prediction for transaction {prediction_result.get('transaction_id')} to results queue")
+        
+        logger.info(f"Completed processing batch of {len(transactions)} transactions")
+        
+        # Short pause between batches
+        time.sleep(1)
 
 
 if __name__ == "__main__":

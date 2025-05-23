@@ -50,6 +50,11 @@ CONFIG = {
     }
 }
 
+# Log configuration for debugging
+logger.info(f"Queue Service URL: {CONFIG['queue_service_url']}")
+logger.info(f"Transaction Queue: {CONFIG['transaction_queue']}")
+logger.info(f"Results Queue: {CONFIG['results_queue']}")
+
 app = Flask(__name__)
 
 class QueueServiceClient:
@@ -65,10 +70,16 @@ class QueueServiceClient:
     def authenticate(self):
         """Authenticate with the queue service."""
         try:
+            # The queue service expects simple form parameters, not OAuth2 format
             response = requests.post(
                 f"{self.base_url}/token",
-                data={"username": self.auth["username"], "password": self.auth["password"]}
+                data={
+                    "username": self.auth["username"],
+                    "password": self.auth["password"]
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
+                
             response.raise_for_status()
             auth_data = response.json()
             self.token = auth_data["access_token"]
@@ -241,20 +252,57 @@ def index():
     # Check if queue service is running
     queue_service_status = "Unknown"
     try:
-        response = requests.get(f"{CONFIG['queue_service_url']}")
-        if response.status_code == 404:
-            # FastAPI returns 404 for root path if no root handler
-            queue_service_status = "Running"
-        else:
-            queue_service_status = "Running"
-    except Exception:
+        # Try to access the queue service
+        # Note: In Docker, we might need to wait for the queue service to be fully up
+        max_retries = 5
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                response = requests.get(f"{CONFIG['queue_service_url']}")
+                if response.status_code == 404:
+                    # FastAPI returns 404 for root path if no root handler
+                    queue_service_status = "Running"
+                    break
+                else:
+                    queue_service_status = "Running"
+                    break
+            except Exception as e:
+                logger.warning(f"Attempt {retry_count+1}/{max_retries} to connect to queue service failed: {str(e)}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(2)  # Wait before retrying
+                else:
+                    queue_service_status = "Not Running"
+    except Exception as e:
+        logger.error(f"Error checking queue service: {str(e)}")
         queue_service_status = "Not Running"
     
-    # Get queue information
+    # Get queue information with retries
     admin_client = QueueServiceClient(CONFIG, use_admin=True)
-    if not admin_client.authenticate():
+    
+    # Try to authenticate with multiple retries
+    max_auth_retries = 10
+    auth_retry_count = 0
+    authenticated = False
+    
+    while auth_retry_count < max_auth_retries:
+        try:
+            if admin_client.authenticate():
+                authenticated = True
+                logger.info("Successfully authenticated with queue service")
+                break
+            else:
+                logger.warning(f"Authentication attempt {auth_retry_count+1}/{max_auth_retries} failed")
+        except Exception as e:
+            logger.warning(f"Authentication attempt {auth_retry_count+1}/{max_auth_retries} failed: {str(e)}")
+        
+        auth_retry_count += 1
+        if auth_retry_count < max_auth_retries:
+            time.sleep(3)  # Wait before retrying
+    
+    if not authenticated:
         return render_template('index.html', 
-                              error="Failed to authenticate with queue service", 
+                              error="Failed to authenticate with queue service after multiple attempts", 
                               queue_service_status=queue_service_status)
     
     queues = admin_client.list_queues()
@@ -379,10 +427,9 @@ if __name__ == '__main__':
     # Create templates directory if it doesn't exist
     os.makedirs('templates', exist_ok=True)
     
-    # Create template file if it doesn't exist
+    # Always create/update the template file to ensure it's the latest version
     template_path = os.path.join('templates', 'index.html')
-    if not os.path.exists(template_path):
-        with open(template_path, 'w') as f:
+    with open(template_path, 'w') as f:
             f.write('''
 <!DOCTYPE html>
 <html lang="en">
@@ -669,13 +716,7 @@ if __name__ == '__main__':
 </html>
             ''')
     
-    # Update requirements.txt to include Flask
-    with open('requirements.txt', 'r') as f:
-        requirements = f.read()
-    
-    if 'flask' not in requirements.lower():
-        with open('requirements.txt', 'a') as f:
-            f.write('\nflask>=2.0.0\n')
+    # Flask is already installed in the Docker container
     
     # Start the Flask app
-    app.run(host='0.0.0.0', port=7600, debug=True)
+    app.run(host='0.0.0.0', port=7600, debug=False)

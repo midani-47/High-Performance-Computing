@@ -1,0 +1,24 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir flask requests python-dotenv pandas numpy
+
+# Copy application files
+COPY web_ui.py .
+COPY .env .
+
+# Create templates directory
+RUN mkdir -p templates
+
+# Expose port
+EXPOSE 7600
+
+# Start the web UI
+CMD ["python", "web_ui.py"]

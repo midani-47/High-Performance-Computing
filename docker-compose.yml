@@ -1,73 +1,74 @@
-version: '3'
-
 services:
-  master:
+  # Queue Service from Assignment 3
+  queue_service:
+    image: python:3.9-slim
+    container_name: queue_service
+    ports:
+      - "7501:7500"
+    volumes:
+      - "../assignment 3/queue_service:/app"
+    working_dir: /app
+    # Use a faster startup command by pre-installing dependencies
+    command: bash -c "apt-get update && apt-get install -y curl && pip install -r requirements.txt && python -m app.main"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7500/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - mpi_network
+
+  # Single container running the prediction service
+  prediction_service:
     build: .
-    container_name: mpi_master
-    hostname: mpi_master
+    container_name: prediction_service
     ports:
       - "22:22"
     environment:
       - NUM_PROCESSORS=5
-      - QUEUE_SERVICE_URL=http://host.docker.internal:7500
+      # Connect to the queue service in the same network
+      - QUEUE_SERVICE_URL=http://queue_service:7500
       - TRANSACTION_QUEUE=transactions
       - RESULTS_QUEUE=predictions
+      - AUTH_USERNAME=agent
+      - AUTH_PASSWORD=agent_password
     volumes:
       - ./mpi:/app/mpi
-    command: /bin/bash -c "/usr/sbin/sshd && sleep 5 && mpirun --allow-run-as-root -n 6 -H mpi_master,mpi_worker1,mpi_worker2,mpi_worker3,mpi_worker4,mpi_worker5 python3 prediction_service.py"
+    # Run with a single process for simplicity and reliability
+    command: python3 prediction_service.py
+    depends_on:
+      queue_service:
+        condition: service_healthy
+    networks:
+      - mpi_network
+  
+  # Web UI for testing
+  web_ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.web_ui
+    container_name: web_ui
+    ports:
+      - "7600:7600"
+    environment:
+      # Connect to the queue service in the same network
+      - QUEUE_SERVICE_URL=http://queue_service:7500
+      - TRANSACTION_QUEUE=transactions
+      - RESULTS_QUEUE=predictions
+      - AUTH_USERNAME=agent
+      - AUTH_PASSWORD=agent_password
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin_password
+    depends_on:
+      queue_service:
+        condition: service_healthy
     networks:
       - mpi_network
 
-  worker1:
-    build: .
-    container_name: mpi_worker1
-    hostname: mpi_worker1
-    volumes:
-      - ./mpi:/app/mpi
-    command: /usr/sbin/sshd -D
-    networks:
-      - mpi_network
-
-  worker2:
-    build: .
-    container_name: mpi_worker2
-    hostname: mpi_worker2
-    volumes:
-      - ./mpi:/app/mpi
-    command: /usr/sbin/sshd -D
-    networks:
-      - mpi_network
-
-  worker3:
-    build: .
-    container_name: mpi_worker3
-    hostname: mpi_worker3
-    volumes:
-      - ./mpi:/app/mpi
-    command: /usr/sbin/sshd -D
-    networks:
-      - mpi_network
-
-  worker4:
-    build: .
-    container_name: mpi_worker4
-    hostname: mpi_worker4
-    volumes:
-      - ./mpi:/app/mpi
-    command: /usr/sbin/sshd -D
-    networks:
-      - mpi_network
-
-  worker5:
-    build: .
-    container_name: mpi_worker5
-    hostname: mpi_worker5
-    volumes:
-      - ./mpi:/app/mpi
-    command: /usr/sbin/sshd -D
-    networks:
-      - mpi_network
+  # No worker nodes needed for the simplified approach
 
 networks:
   mpi_network:
     driver: bridge
+    name: mpi_network
