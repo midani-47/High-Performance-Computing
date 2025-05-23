@@ -29,8 +29,8 @@ services:
       - NUM_PROCESSORS=5
       # Connect to the queue service in the same network
       - QUEUE_SERVICE_URL=http://queue_service:7500
-      - TRANSACTION_QUEUE=transactions
-      - RESULTS_QUEUE=predictions
+      - TRANSACTION_QUEUE=Queue1
+      - RESULTS_QUEUE=Queue2
       - AUTH_USERNAME=admin
       - AUTH_PASSWORD=admin_password
     volumes:
@@ -54,8 +54,8 @@ services:
     environment:
       # Connect to the queue service in the same network
       - QUEUE_SERVICE_URL=http://queue_service:7500
-      - TRANSACTION_QUEUE=transactions
-      - RESULTS_QUEUE=predictions
+      - TRANSACTION_QUEUE=Queue1
+      - RESULTS_QUEUE=Queue2
       - AUTH_USERNAME=admin
       - AUTH_PASSWORD=admin_password
       - ADMIN_USERNAME=admin

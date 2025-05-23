@@ -155,12 +155,17 @@ def load_model(model_path):
         return model
     except Exception as e:
         logger.warning(f"Could not load model from {model_path}: {str(e)}")
-        logger.info("Using a mock model function instead")
-        # Create a simple mock model function that always returns a prediction
-        def mock_model(features):
-            # Return random prediction (0 for legitimate, 1 for fraudulent)
-            return np.random.choice([0, 1], p=[0.9, 0.1]) 
-        return mock_model
+        logger.info("Using a mock model class instead")
+        
+        # Create a mock model class that implements predict_proba
+        class MockModel:
+            def predict_proba(self, features):
+                # For each input, return probability of class 0 (legitimate) and class 1 (fraudulent)
+                batch_size = len(features) if hasattr(features, '__len__') else 1
+                # Mostly legitimate (90% chance) with some fraudulent (10% chance)
+                return np.array([[0.9, 0.1] for _ in range(batch_size)])
+                
+        return MockModel()
 
 
 def preprocess_transaction(transaction):
