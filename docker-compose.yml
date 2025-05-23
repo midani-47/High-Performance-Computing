@@ -31,8 +31,8 @@ services:
       - QUEUE_SERVICE_URL=http://queue_service:7500
       - TRANSACTION_QUEUE=transactions
       - RESULTS_QUEUE=predictions
-      - AUTH_USERNAME=agent
-      - AUTH_PASSWORD=agent_password
+      - AUTH_USERNAME=admin
+      - AUTH_PASSWORD=admin_password
     volumes:
       - ./mpi:/app/mpi
     # Run with a single process for simplicity and reliability
@@ -56,8 +56,8 @@ services:
       - QUEUE_SERVICE_URL=http://queue_service:7500
       - TRANSACTION_QUEUE=transactions
       - RESULTS_QUEUE=predictions
-      - AUTH_USERNAME=agent
-      - AUTH_PASSWORD=agent_password
+      - AUTH_USERNAME=admin
+      - AUTH_PASSWORD=admin_password
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin_password
     depends_on:

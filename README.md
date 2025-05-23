@@ -49,7 +49,10 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 The entire system can be started with a single Docker Compose command:
 
 ```bash
-# Start everything with Docker Compose
+# For first-time setup (or after changes), use the --build flag
+docker-compose up --build -d
+
+# For subsequent runs
 docker-compose up -d
 
 # To check logs
@@ -89,18 +92,18 @@ mpirun -n 6 python prediction_service.py
 The service can be configured through environment variables or the `.env` file:
 
 - `NUM_PROCESSORS`: Number of worker processors (default: 5)
-- `QUEUE_SERVICE_URL`: URL of the queue service (default: http://localhost:7500)
+- `QUEUE_SERVICE_URL`: URL of the queue service (default: http://localhost:7501)
 - `TRANSACTION_QUEUE`: Name of the transaction queue (default: transactions)
 - `RESULTS_QUEUE`: Name of the results queue (default: predictions)
 - `MODEL_PATH`: Path to the pre-trained model (default: ./mpi/fraud_rf_model.pkl)
-- `AUTH_USERNAME`: Username for queue service authentication (default: agent)
-- `AUTH_PASSWORD`: Password for queue service authentication (default: agent_password)
+- `AUTH_USERNAME`: Username for queue service authentication (default: admin)
+- `AUTH_PASSWORD`: Password for queue service authentication (default: admin_password)
 
 ## Usage
 
 ### One-Command Docker Approach
 
-1. Run `docker-compose up -d` to start everything
+1. Run `docker-compose up --build -d` to start everything (first time)
 2. Open http://localhost:7600 in your browser to access the web UI
 3. Use the web UI to:
    - Set up the transaction and prediction queues (if they don't exist)
