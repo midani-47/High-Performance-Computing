@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM continuumio/miniconda3:latest
 
 WORKDIR /app
 
@@ -7,13 +7,14 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies with specific versions to ensure compatibility
-RUN pip install --no-cache-dir \
-    flask==3.1.1 \
-    requests==2.31.0 \
-    python-dotenv==1.1.0 \
-    pandas==2.2.3 \
-    numpy==2.0.2
+# Create a conda environment with all required packages
+RUN conda create -n web_env python=3.9 -y && \
+    conda install -n web_env -c conda-forge flask numpy pandas python-dotenv requests -y
+
+# Make RUN commands use the conda environment
+SHELL ["/bin/bash", "-c"]
+RUN echo "source activate web_env" > ~/.bashrc
+ENV PATH /opt/conda/envs/web_env/bin:$PATH
 
 # Copy application files
 COPY web_ui_file.py .

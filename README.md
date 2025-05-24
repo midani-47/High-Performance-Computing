@@ -23,10 +23,18 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 
 ## System Requirements
 
-- Python 3.8 or higher
+- Python 3.9 or higher
 - OpenMPI 4.0 or higher
 - Docker and Docker Compose (for containerized deployment)
-- Dependencies listed in requirements.txt
+
+### Dependencies
+- mpi4py (for MPI support)
+- numpy, pandas, scikit-learn (for data processing and ML)
+- flask (for web UI)
+- python-dotenv (for environment variables)
+- joblib (for model loading)
+
+All dependencies are automatically installed in the Docker containers using conda environments to avoid memory issues during builds.
 
 ## Project Structure
 

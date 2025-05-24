@@ -18,13 +18,14 @@ services:
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
     # Use mpirun to start the master and worker processes
     command: >
+      bash -c "source activate mpi_env && 
       mpirun --allow-run-as-root 
-      -n 1 -H mpi_master python3 prediction_service.py : 
-      -n 1 -H mpi_worker1 python3 prediction_service.py : 
-      -n 1 -H mpi_worker2 python3 prediction_service.py : 
-      -n 1 -H mpi_worker3 python3 prediction_service.py : 
-      -n 1 -H mpi_worker4 python3 prediction_service.py : 
-      -n 1 -H mpi_worker5 python3 prediction_service.py
+      -n 1 -H mpi_master python prediction_service.py : 
+      -n 1 -H mpi_worker1 python prediction_service.py : 
+      -n 1 -H mpi_worker2 python prediction_service.py : 
+      -n 1 -H mpi_worker3 python prediction_service.py : 
+      -n 1 -H mpi_worker4 python prediction_service.py : 
+      -n 1 -H mpi_worker5 python prediction_service.py"
     networks:
       - mpi_network
     depends_on:
@@ -46,7 +47,7 @@ services:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
     # Workers wait for the master to start them via MPI
-    command: sleep infinity
+    command: bash -c "source activate mpi_env && sleep infinity"
     networks:
       - mpi_network
 
@@ -60,7 +61,7 @@ services:
     environment:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
+    command: bash -c "source activate mpi_env && sleep infinity"
     networks:
       - mpi_network
 
@@ -74,7 +75,7 @@ services:
     environment:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
+    command: bash -c "source activate mpi_env && sleep infinity"
     networks:
       - mpi_network
 
@@ -88,7 +89,7 @@ services:
     environment:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
+    command: bash -c "source activate mpi_env && sleep infinity"
     networks:
       - mpi_network
 
@@ -102,7 +103,7 @@ services:
     environment:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
+    command: bash -c "source activate mpi_env && sleep infinity"
     networks:
       - mpi_network
   
@@ -121,7 +122,7 @@ services:
       - TRANSACTION_QUEUE_FILE=TQ1.json
       - TRANSACTION_QUEUE_FILE2=TQ2.json
       - RESULTS_QUEUE_FILE=PQ1.json
-    command: python3 web_ui_file.py
+    command: bash -c "source activate web_env && python web_ui_file.py"
     networks:
       - mpi_network
 
