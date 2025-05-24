@@ -1,32 +1,35 @@
-FROM python:3.9-slim
+FROM ubuntu:20.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Set up working directory
 WORKDIR /app
 
-# Install system dependencies and Python packages in a single layer to reduce build time
+# Install system dependencies including Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openssh-server \
+    python3 \
+    python3-pip \
+    python3-setuptools \
+    python3-dev \
+    python3-numpy \
+    python3-pandas \
+    python3-sklearn \
+    python3-flask \
+    python3-mpi4py \
     openmpi-bin \
     libopenmpi-dev \
-    python3-mpi4py \
-    && pip install --no-cache-dir \
-    numpy \
-    pandas \
-    scikit-learn \
-    joblib \
-    flask \
-    python-dotenv \
-    requests \
+    build-essential \
+    python3-joblib \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/run/sshd \
-    && echo 'root:password' | chpasswd \
-    && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config \
-    && sed -i 's/#StrictHostKeyChecking ask/StrictHostKeyChecking no/' /etc/ssh/ssh_config \
-    && mkdir -p /root/.ssh \
-    && ssh-keygen -t rsa -f /root/.ssh/id_rsa -N "" \
-    && cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys \
-    && chmod 600 /root/.ssh/authorized_keys
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for Python
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Install any remaining Python packages that don't have system packages
+RUN pip install --no-cache-dir python-dotenv requests
 
 # Create necessary directories
 RUN mkdir -p /app/mpi

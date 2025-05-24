@@ -507,9 +507,8 @@ if __name__ == '__main__':
                             <li>Push sample transactions to either TQ1 or TQ2</li>
                             <li>Start the MPI prediction service using one of these methods:
                                 <ul>
-                                    <li><code>mpirun -n 6 python prediction_service.py</code> (local mode)</li>
-                                    <li><code>docker-compose up mpi_master</code> (Docker mode - if web UI is already running)</li>
-                                    <li><code>docker-compose up</code> (Docker mode - to start everything including web UI)</li>
+                                    <li><code>docker-compose up</code> (Start both the web UI and MPI prediction service)</li>
+                                    <li><code>docker-compose up mpi_service</code> (Start just the MPI prediction service if web UI is already running)</li>
                                 </ul>
                             </li>
                             <li>The prediction service will process transactions from the queue with the most messages</li>

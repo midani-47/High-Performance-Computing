@@ -1,11 +1,10 @@
 version: '3.8'
 
 services:
-  # MPI Master node (rank 0)
-  mpi_master:
+  # Single container running MPI processes
+  mpi_service:
     build: .
-    container_name: mpi_master
-    hostname: mpi_master
+    container_name: mpi_service
     volumes:
       - ./mpi:/app/mpi:ro
       - ./a3:/app/a3:rw
@@ -16,95 +15,11 @@ services:
       - TRANSACTION_QUEUE_FILE2=TQ2.json
       - RESULTS_QUEUE_FILE=PQ1.json
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    # Use mpirun to start the master and worker processes
-    command: >
-      mpirun --allow-run-as-root 
-      -n 1 -H mpi_master python3 prediction_service.py : 
-      -n 1 -H mpi_worker1 python3 prediction_service.py : 
-      -n 1 -H mpi_worker2 python3 prediction_service.py : 
-      -n 1 -H mpi_worker3 python3 prediction_service.py : 
-      -n 1 -H mpi_worker4 python3 prediction_service.py : 
-      -n 1 -H mpi_worker5 python3 prediction_service.py
+    # Run MPI with all processes in a single container
+    command: mpirun --allow-run-as-root -n 6 python3 prediction_service.py
     networks:
       - mpi_network
-    depends_on:
-      - mpi_worker1
-      - mpi_worker2
-      - mpi_worker3
-      - mpi_worker4
-      - mpi_worker5
-
-  # MPI Worker nodes (ranks 1-5)
-  mpi_worker1:
-    build: .
-    container_name: mpi_worker1
-    hostname: mpi_worker1
-    volumes:
-      - ./mpi:/app/mpi:ro
-      - ./a3:/app/a3:rw
-    environment:
-      - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
-      - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    # Workers wait for the master to start them via MPI
-    command: sleep infinity
-    networks:
-      - mpi_network
-
-  mpi_worker2:
-    build: .
-    container_name: mpi_worker2
-    hostname: mpi_worker2
-    volumes:
-      - ./mpi:/app/mpi:ro
-      - ./a3:/app/a3:rw
-    environment:
-      - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
-      - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
-    networks:
-      - mpi_network
-
-  mpi_worker3:
-    build: .
-    container_name: mpi_worker3
-    hostname: mpi_worker3
-    volumes:
-      - ./mpi:/app/mpi:ro
-      - ./a3:/app/a3:rw
-    environment:
-      - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
-      - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
-    networks:
-      - mpi_network
-
-  mpi_worker4:
-    build: .
-    container_name: mpi_worker4
-    hostname: mpi_worker4
-    volumes:
-      - ./mpi:/app/mpi:ro
-      - ./a3:/app/a3:rw
-    environment:
-      - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
-      - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
-    networks:
-      - mpi_network
-
-  mpi_worker5:
-    build: .
-    container_name: mpi_worker5
-    hostname: mpi_worker5
-    volumes:
-      - ./mpi:/app/mpi:ro
-      - ./a3:/app/a3:rw
-    environment:
-      - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
-      - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    command: sleep infinity
-    networks:
-      - mpi_network
+    restart: always  # Ensure the service keeps trying to restart until successful
   
   # Web UI for testing
   web_ui:
@@ -124,6 +39,7 @@ services:
     command: python3 web_ui_file.py
     networks:
       - mpi_network
+    restart: always  # Ensure the service keeps trying to restart until successful
 
 networks:
   mpi_network:

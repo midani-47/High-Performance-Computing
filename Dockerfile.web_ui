@@ -1,12 +1,25 @@
-FROM python:3.9-slim
+FROM ubuntu:20.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# Install Python packages in a single layer to reduce build time
+# Install Python and system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-setuptools \
+    python3-numpy \
+    python3-pandas \
+    python3-flask \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Install any remaining Python packages without system packages
 RUN pip install --no-cache-dir \
-    flask \
-    numpy \
-    pandas \
     python-dotenv \
     requests
 

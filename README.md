@@ -63,8 +63,13 @@ The system is designed for fast setup and deployment. Follow these steps:
 
 ### Step 1: Run the initialization script
 
+**On Windows:**
+```cmd
+init_setup.bat
+```
+
+**On macOS/Linux:**
 ```bash
-# Run the initialization script to set up the environment
 ./init_setup.sh
 ```
 
@@ -72,27 +77,36 @@ This script will:
 1. Create the necessary directories for queue data and the model
 2. Generate the fraud detection model if it doesn't exist
 3. Create empty queue files if they don't exist
-4. Set proper permissions for the queue data directory
+4. Set proper permissions for the queue data directories
 
-### Step 2: Start the system
+### Step 2: Start the system with a single command
 
-You can start the entire system or individual components:
-
-```bash
-# Start everything (web UI and MPI prediction service)
+```
 docker-compose up --build -d
+```
 
-# If you only want to start the web UI
+This single command will:
+1. Build and start the MPI prediction service with 1 master and 5 worker processes
+2. Build and start the web UI service
+3. Create the necessary Docker network
+
+### Additional Commands
+
+```
+# If you need to restart just the MPI prediction service
+docker-compose up --build -d mpi_service
+
+# If you need to restart just the web UI
 docker-compose up --build -d web_ui
 
-# If the web UI is already running and you want to start the prediction service
-docker-compose up --build -d mpi_master
-
-# To check logs
+# To view logs of all services
 docker-compose logs -f
 
-# To check logs for a specific service
-docker-compose logs -f mpi_master
+# To view logs of just the MPI prediction service
+docker-compose logs -f mpi_service
+
+# To stop all services
+docker-compose down
 ```
 
 The system consists of:
@@ -102,11 +116,11 @@ The system consists of:
    - Push sample transactions
    - View prediction results
 
-2. **MPI Prediction Service** - Consists of:
-   - 1 master node (mpi_master)
-   - 5 worker nodes (mpi_worker1-5)
-   - Processes transactions from the queue files
-   - Writes results to the prediction results file
+2. **MPI Prediction Service** - A single container that runs multiple MPI processes:
+   - Runs 6 MPI processes (1 master + 5 workers) within a single container
+   - Reads transactions from the queue files (TQ1.json and TQ2.json)
+   - Processes transactions in parallel using MPI
+   - Writes prediction results to the results file (PQ1.json)
 
 Once started, open http://localhost:7600 in your browser to access the web UI for testing.
 
@@ -114,26 +128,47 @@ Once started, open http://localhost:7600 in your browser to access the web UI fo
 
 If you prefer to run components individually without Docker:
 
+#### Option 1: Simple Setup (No MPI Required)
+
+```bash
+# 1. Install Python dependencies
+pip install numpy pandas scikit-learn python-dotenv joblib flask requests
+
+# 2. Run the initialization script to set up directories and files
+./init_setup.sh
+
+# 3. Start the web UI in one terminal
+python3 web_ui_file.py
+
+# 4. Start the prediction service in another terminal
+python3 prediction_service.py
+```
+
+#### Option 2: MPI-based Parallel Processing
+
 ```bash
 # 1. Install OpenMPI
 brew install open-mpi  # macOS
 # or
 sudo apt-get install openmpi-bin libopenmpi-dev  # Ubuntu
 
-# 2. Install Python dependencies
+# 2. Install Python dependencies including MPI
 pip install mpi4py numpy pandas scikit-learn python-dotenv joblib flask requests
 
 # 3. Run the initialization script to set up directories and files
 ./init_setup.sh
 
 # 4. Start the web UI in one terminal
-python web_ui_file.py
+python3 web_ui_file.py
 
-# 5. Start the prediction service in another terminal (6 processes: 1 master + 5 workers)
-mpirun -n 6 python prediction_service.py
+# 5. Start the prediction service with MPI in another terminal
+mpirun -n 6 python3 prediction_service.py
 ```
 
-Note: When running manually, make sure to start the web UI first, then use it to push some transactions, and then start the prediction service to process them.
+**Note**: The prediction service is designed to work both with and without MPI. When running manually, make sure to:
+1. Start the web UI first
+2. Use the web UI to push some sample transactions to the queue
+3. Then start the prediction service to process those transactions
 
 ## Configuration
 

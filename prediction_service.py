@@ -241,9 +241,16 @@ def predict_fraud(model, transaction):
 def main():
     """Main entry point for the prediction service."""
     # Initialize MPI
+    from mpi4py import MPI
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()  # Processor rank (0 is master, others are workers)
     size = comm.Get_size()  # Total number of processors
+    
+    # Log MPI configuration
+    logger.info(f"MPI initialized with {size} processes, current rank: {rank}")
+    
+    # Set flag for MPI availability (always true since we're using mpi4py)
+    mpi_available = True
     
     if rank == 0:  # Master process
         logger.info(f"Starting prediction service with {size} processors (1 master + {size-1} workers)")
@@ -299,7 +306,7 @@ def main():
             # Distribute transactions to workers
             results = []
             
-            if size > 1:  # If we have worker processes
+            if mpi_available and size > 1:  # If we have worker processes and MPI is available
                 # Send transactions to workers
                 for i, transaction in enumerate(transactions):
                     worker_rank = (i % num_workers) + 1  # Workers start at rank 1
@@ -318,11 +325,14 @@ def main():
                     if result is not None:
                         results.append(result)
                         logger.info(f"Received result from worker {worker_rank}")
-            else:  # Single process mode
+            else:  # Single process mode (either no MPI or only one process)
                 # Process transactions in the master process
+                logger.info(f"Processing {len(transactions)} transactions in single-process mode")
                 for transaction in transactions:
                     try:
-                        result = predict_fraud(model, transaction)
+                        # Extract the actual transaction content from the message
+                        transaction_content = transaction.get('content', transaction)
+                        result = predict_fraud(model, transaction_content)
                         if result:
                             results.append(result)
                     except Exception as e:
@@ -357,11 +367,13 @@ def main():
                 comm.send(None, dest=0)
                 continue
             
-            logger.info(f"Worker {rank} processing transaction {transaction.get('transaction_id', 'unknown')}")
+            # Extract the actual transaction content from the message
+            transaction_content = transaction.get('content', transaction)
+            logger.info(f"Worker {rank} processing transaction {transaction_content.get('transaction_id', 'unknown')}")
             
             try:
                 # Process the transaction
-                result = predict_fraud(model, transaction)
+                result = predict_fraud(model, transaction_content)
                 # Send result back to master
                 comm.send(result, dest=0)
             except Exception as e:

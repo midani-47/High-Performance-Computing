@@ -1,33 +1,36 @@
 #!/bin/bash
 # Initialization script to set up the environment before running Docker containers
 
+echo "Setting up environment for MPI Prediction Service..."
+
 # Create necessary directories
 mkdir -p a3/queue_service/queue_data
 mkdir -p mpi
 
-# Check if model exists, if not create it
-if [ ! -f mpi/fraud_rf_model.pkl ]; then
-    echo "Creating fraud detection model..."
-    python create_model.py
+# Generate model if it doesn't exist
+if [ ! -f "mpi/fraud_rf_model.pkl" ]; then
+    echo "Generating fraud detection model..."
+    python3 create_model.py
 fi
 
-# Check if queue files exist, if not create them
-if [ ! -f a3/queue_service/queue_data/TQ1.json ]; then
-    echo "Creating TQ1.json..."
+# Create empty queue files if they don't exist
+if [ ! -f "a3/queue_service/queue_data/TQ1.json" ]; then
+    echo "Creating empty TQ1.json..."
     echo "[]" > a3/queue_service/queue_data/TQ1.json
 fi
 
-if [ ! -f a3/queue_service/queue_data/TQ2.json ]; then
-    echo "Creating TQ2.json..."
+if [ ! -f "a3/queue_service/queue_data/TQ2.json" ]; then
+    echo "Creating empty TQ2.json..."
     echo "[]" > a3/queue_service/queue_data/TQ2.json
 fi
 
-if [ ! -f a3/queue_service/queue_data/PQ1.json ]; then
-    echo "Creating PQ1.json..."
+if [ ! -f "a3/queue_service/queue_data/PQ1.json" ]; then
+    echo "Creating empty PQ1.json..."
     echo "[]" > a3/queue_service/queue_data/PQ1.json
 fi
 
-# Set proper permissions
+# Set permissions for queue data directory
 chmod -R 777 a3/queue_service/queue_data
 
-echo "Initialization complete. You can now run 'docker-compose up --build -d'"
+echo "Environment setup complete!"
+echo "You can now run: docker-compose up --build -d"
