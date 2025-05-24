@@ -59,7 +59,9 @@ All dependencies are automatically installed in the Docker containers using cond
 
 ## Quick Setup (Docker-based)
 
-Before starting the Docker containers, run the initialization script to set up the necessary directories and files:
+The system is designed for fast setup and deployment. Follow these steps:
+
+### Step 1: Run the initialization script
 
 ```bash
 # Run the initialization script to set up the environment
@@ -72,14 +74,19 @@ This script will:
 3. Create empty queue files if they don't exist
 4. Set proper permissions for the queue data directory
 
-After initialization, the entire system can be started with a single Docker Compose command:
+### Step 2: Start the system
+
+You can start the entire system or individual components:
 
 ```bash
-# For first-time setup (or after changes), use the --build flag
+# Start everything (web UI and MPI prediction service)
 docker-compose up --build -d
 
-# For subsequent runs
-docker-compose up -d
+# If you only want to start the web UI
+docker-compose up --build -d web_ui
+
+# If the web UI is already running and you want to start the prediction service
+docker-compose up --build -d mpi_master
 
 # To check logs
 docker-compose logs -f
@@ -88,10 +95,18 @@ docker-compose logs -f
 docker-compose logs -f mpi_master
 ```
 
-This will automatically:
+The system consists of:
 
-1. Start the MPI master node and 5 worker nodes
-2. Launch a web UI for testing at http://localhost:7600
+1. **Web UI** - Runs on http://localhost:7600 and provides an interface to:
+   - View queue status
+   - Push sample transactions
+   - View prediction results
+
+2. **MPI Prediction Service** - Consists of:
+   - 1 master node (mpi_master)
+   - 5 worker nodes (mpi_worker1-5)
+   - Processes transactions from the queue files
+   - Writes results to the prediction results file
 
 Once started, open http://localhost:7600 in your browser to access the web UI for testing.
 
@@ -100,20 +115,25 @@ Once started, open http://localhost:7600 in your browser to access the web UI fo
 If you prefer to run components individually without Docker:
 
 ```bash
-# Install OpenMPI
+# 1. Install OpenMPI
 brew install open-mpi  # macOS
 # or
 sudo apt-get install openmpi-bin libopenmpi-dev  # Ubuntu
 
-# Install Python dependencies
-pip install mpi4py numpy pandas scikit-learn python-dotenv joblib
+# 2. Install Python dependencies
+pip install mpi4py numpy pandas scikit-learn python-dotenv joblib flask requests
 
-# Start the prediction service with 6 processes (1 master + 5 workers)
-mpirun -n 6 python prediction_service.py
+# 3. Run the initialization script to set up directories and files
+./init_setup.sh
 
-# Start the web UI in a separate terminal
+# 4. Start the web UI in one terminal
 python web_ui_file.py
+
+# 5. Start the prediction service in another terminal (6 processes: 1 master + 5 workers)
+mpirun -n 6 python prediction_service.py
 ```
+
+Note: When running manually, make sure to start the web UI first, then use it to push some transactions, and then start the prediction service to process them.
 
 ## Configuration
 
