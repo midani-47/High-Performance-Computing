@@ -7,18 +7,24 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-RUN pip install --no-cache-dir flask requests python-dotenv pandas numpy
+# Install Python dependencies with specific versions to ensure compatibility
+RUN pip install --no-cache-dir \
+    flask==3.1.1 \
+    requests==2.31.0 \
+    python-dotenv==1.1.0 \
+    pandas==2.2.3 \
+    numpy==2.0.2
 
 # Copy application files
-COPY web_ui.py .
+COPY web_ui_file.py .
 COPY .env .
 
-# Create templates directory
+# Create templates directory and necessary data directories
 RUN mkdir -p templates
+RUN mkdir -p /app/a3/queue_service/queue_data
 
 # Expose port
 EXPOSE 7600
 
 # Start the web UI
-CMD ["python", "web_ui.py"]
+CMD ["python", "web_ui_file.py"]

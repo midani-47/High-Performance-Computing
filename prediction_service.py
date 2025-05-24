@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""
-MPI-based ML Prediction Service for Fraud Detection
+"""MPI-based ML Prediction Service
 
-This service reads transactions from a queue, distributes them to MPI worker
-processes for prediction using a pre-trained model, and sends the results
-back to a results queue.
+This service reads transactions from queue files, processes them using MPI workers,
+and writes prediction results back to a results queue file.
 """
 
 import os
@@ -13,10 +11,11 @@ import json
 import time
 import pickle
 import logging
-import requests
+import uuid
 import numpy as np
-import pandas as pd
+from datetime import datetime
 from dotenv import load_dotenv
+from mpi4py import MPI
 
 # Load environment variables
 load_dotenv()
@@ -34,117 +33,127 @@ logger = logging.getLogger("prediction_service")
 
 # Configuration
 CONFIG = {
-    "num_processors": int(os.getenv("NUM_PROCESSORS", 5)),
-    "queue_service_url": os.getenv("QUEUE_SERVICE_URL", "http://localhost:7500"),
-    "transaction_queue": os.getenv("TRANSACTION_QUEUE", "transactions"),
-    "results_queue": os.getenv("RESULTS_QUEUE", "predictions"),
+    "queue_data_dir": os.getenv("QUEUE_DATA_DIR", "./a3/queue_service/queue_data"),
+    "transaction_queue_file": os.getenv("TRANSACTION_QUEUE_FILE", "TQ1.json"),
+    "transaction_queue_file2": os.getenv("TRANSACTION_QUEUE_FILE2", "TQ2.json"),
+    "results_queue_file": os.getenv("RESULTS_QUEUE_FILE", "PQ1.json"),
     "model_path": os.getenv("MODEL_PATH", "./mpi/fraud_rf_model.pkl"),
-    "auth": {
-        "username": os.getenv("AUTH_USERNAME", "agent"),
-        "password": os.getenv("AUTH_PASSWORD", "agent_password")
-    }
+    "num_processors": int(os.getenv("NUM_PROCESSORS", "5"))
 }
 
-class QueueClient:
-    """Client for interacting with the queue service from Assignment 3."""
+class FileQueueClient:
+    """Client for interacting with queue files directly."""
     
     def __init__(self, config):
-        """Initialize the queue client with configuration."""
-        self.base_url = config["queue_service_url"]
-        self.auth = config["auth"]
-        self.token = None
-        self.token_type = None
+        """Initialize the file queue client with configuration."""
+        self.queue_data_dir = config["queue_data_dir"]
+        self.transaction_queue_file = os.path.join(self.queue_data_dir, config["transaction_queue_file"])
+        self.transaction_queue_file2 = os.path.join(self.queue_data_dir, config["transaction_queue_file2"])
+        self.results_queue_file = os.path.join(self.queue_data_dir, config["results_queue_file"])
         
-    def authenticate(self):
-        """Authenticate with the queue service."""
+        # Ensure the queue data directory exists
+        os.makedirs(self.queue_data_dir, exist_ok=True)
+        
+        # Initialize queue files if they don't exist
+        self._initialize_queue_file(self.transaction_queue_file)
+        self._initialize_queue_file(self.transaction_queue_file2)
+        self._initialize_queue_file(self.results_queue_file)
+        
+        logger.info(f"FileQueueClient initialized with data directory: {self.queue_data_dir}")
+        logger.info(f"Transaction queue files: {self.transaction_queue_file}, {self.transaction_queue_file2}")
+        logger.info(f"Results queue file: {self.results_queue_file}")
+    
+    def _initialize_queue_file(self, file_path):
+        """Initialize a queue file if it doesn't exist."""
+        if not os.path.exists(file_path):
+            with open(file_path, 'w') as f:
+                json.dump([], f)
+            logger.info(f"Created empty queue file: {file_path}")
+    
+    def _read_queue(self, queue_file):
+        """Read messages from a queue file."""
         try:
-            # The FastAPI endpoint expects query parameters (not form or JSON data)
-            response = requests.post(
-                f"{self.base_url}/token",
-                params={
-                    "username": self.auth["username"],
-                    "password": self.auth["password"]
-                }
-            )
-                
-            if response.status_code == 422:
-                logger.warning(f"FastAPI validation error: {response.text}")
-                
-            response.raise_for_status()
-            auth_data = response.json()
-            self.token = auth_data["access_token"]
-            self.token_type = auth_data["token_type"]
-            logger.info("Authentication successful")
+            with open(queue_file, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logger.warning(f"Error decoding JSON from {queue_file}, initializing empty queue")
+            with open(queue_file, 'w') as f:
+                json.dump([], f)
+            return []
+        except Exception as e:
+            logger.error(f"Error reading queue file {queue_file}: {str(e)}")
+            return []
+    
+    def _write_queue(self, queue_file, messages):
+        """Write messages to a queue file."""
+        try:
+            with open(queue_file, 'w') as f:
+                json.dump(messages, f, indent=2)
             return True
         except Exception as e:
-            logger.error(f"Authentication failed: {str(e)}")
+            logger.error(f"Error writing to queue file {queue_file}: {str(e)}")
             return False
     
-    def get_headers(self):
-        """Get authentication headers for API requests."""
-        if not self.token:
-            self.authenticate()
-        return {"Authorization": f"{self.token_type} {self.token}"}
+    def queue_exists(self, queue_file):
+        """Check if a queue file exists."""
+        return os.path.exists(queue_file) and os.path.getsize(queue_file) > 0
     
-    def pull_message(self, queue_name):
-        """Pull a message from the specified queue."""
+    def push_message(self, queue_file, message):
+        """Push a message to the specified queue file."""
         try:
-            response = requests.get(
-                f"{self.base_url}/queues/{queue_name}/pull",
-                headers=self.get_headers()
-            )
+            # Read current messages
+            messages = self._read_queue(queue_file)
             
-            if response.status_code == 404:
-                # Queue might not exist
-                logger.warning(f"Queue {queue_name} not found")
-                return None
-                
-            if response.status_code == 204:
-                # Queue is empty
-                logger.info(f"Queue {queue_name} is empty")
-                return None
-                
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as e:
-            if e.response.status_code == 401:
-                # Token expired, re-authenticate
-                self.authenticate()
-                return self.pull_message(queue_name)
-            logger.error(f"Error pulling message: {str(e)}")
-            return None
+            # Add new message with metadata
+            message_with_metadata = {
+                "id": str(uuid.uuid4()),
+                "content": message,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            messages.append(message_with_metadata)
+            
+            # Write back to file
+            success = self._write_queue(queue_file, messages)
+            if success:
+                logger.info(f"Message pushed to {os.path.basename(queue_file)} successfully")
+            return success
         except Exception as e:
-            logger.error(f"Error pulling message: {str(e)}")
-            return None
+            logger.error(f"Error pushing message to {queue_file}: {str(e)}")
+            return False
     
-    def push_message(self, queue_name, message):
-        """Push a message to the specified queue."""
+    def pull_messages(self, queue_file, count=1):
+        """Pull multiple messages from the specified queue file."""
         try:
-            response = requests.post(
-                f"{self.base_url}/queues/{queue_name}/push",
-                headers=self.get_headers(),
-                json=message
-            )
+            # Read current messages
+            messages = self._read_queue(queue_file)
             
-            if response.status_code == 404:
-                # Queue might not exist
-                logger.warning(f"Queue {queue_name} not found")
-                return False
-                
-            response.raise_for_status()
-            logger.info(f"Message pushed to {queue_name} successfully")
-            return True
-        except requests.HTTPError as e:
-            if e.response.status_code == 401:
-                # Token expired, re-authenticate
-                self.authenticate()
-                return self.push_message(queue_name, message)
-            logger.error(f"Error pushing message: {str(e)}")
-            return False
+            if not messages:
+                logger.info(f"Queue {os.path.basename(queue_file)} is empty")
+                return []
+            
+            # Take the requested number of messages (or all if fewer available)
+            count = min(count, len(messages))
+            pulled_messages = messages[:count]
+            remaining_messages = messages[count:]
+            
+            # Write remaining messages back to file
+            self._write_queue(queue_file, remaining_messages)
+            
+            # Extract just the content of each message
+            return [msg["content"] for msg in pulled_messages]
         except Exception as e:
-            logger.error(f"Error pushing message: {str(e)}")
-            return False
-
+            logger.error(f"Error pulling messages from {queue_file}: {str(e)}")
+            return []
+    
+    def get_queue_size(self, queue_file):
+        """Get the number of messages in a queue."""
+        try:
+            messages = self._read_queue(queue_file)
+            return len(messages)
+        except Exception as e:
+            logger.error(f"Error getting queue size for {queue_file}: {str(e)}")
+            return 0
 
 def load_model(model_path):
     """Load the pre-trained fraud detection model."""
@@ -167,197 +176,197 @@ def load_model(model_path):
                 
         return MockModel()
 
-
 def preprocess_transaction(transaction):
     """
     Preprocess transaction data for the model.
     This function extracts and formats the features needed by the model.
     """
-    # Extract relevant features from the transaction
     try:
-        # For a real fraud detection model, we would extract all relevant features
-        # For this implementation, we'll use a simplified set of features that should work with the model
-        # The exact features would depend on what the model was trained on
+        # Extract features from transaction
+        # In a real system, this would involve more sophisticated feature engineering
+        # For this example, we'll use a simplified approach
         
-        # Convert amount to float (this is typically an important feature for fraud detection)
+        # Check if we have the necessary fields
+        if not isinstance(transaction, dict):
+            logger.error(f"Invalid transaction format: {type(transaction)}")
+            return None
+            
+        # Extract basic features (amount, customer_id, vendor_id)
         amount = float(transaction.get('amount', 0))
         
-        # Extract customer and vendor information
-        # We'll convert these to numeric features since most ML models require numeric input
-        customer_id = transaction.get('customer_id', '')
-        vendor_id = transaction.get('vendor_id', '')
+        # Create a feature vector (in a real system, this would be more complex)
+        # For simplicity, we'll just use the transaction amount as our feature
+        features = np.array([amount])
         
-        # Extract customer ID number if it's in format 'CUST_1234'
-        customer_id_num = 0
-        if isinstance(customer_id, str) and '_' in customer_id:
-            try:
-                customer_id_num = int(customer_id.split('_')[1])
-            except (IndexError, ValueError):
-                customer_id_num = hash(customer_id) % 10000  # Fallback to hash
-        elif isinstance(customer_id, str):
-            customer_id_num = hash(customer_id) % 10000
-            
-        # Extract vendor ID number if it's in format 'VENDOR_123'
-        vendor_id_num = 0
-        if isinstance(vendor_id, str) and '_' in vendor_id:
-            try:
-                vendor_id_num = int(vendor_id.split('_')[1])
-            except (IndexError, ValueError):
-                vendor_id_num = hash(vendor_id) % 1000  # Fallback to hash
-        elif isinstance(vendor_id, str):
-            vendor_id_num = hash(vendor_id) % 1000
-        
-        # Create feature dictionary
-        features = {
-            'amount': amount,
-            'customer_id_num': customer_id_num,
-            'vendor_id_num': vendor_id_num,
-            # Add derived features that might help with fraud detection
-            'amount_log': np.log1p(amount) if amount > 0 else 0,
-            'amount_bin': min(int(amount / 100), 9)  # Bin amount into 10 categories
-        }
-        
-        # Convert to DataFrame for model input
-        df = pd.DataFrame([features])
-        return df
+        return features
     except Exception as e:
         logger.error(f"Error preprocessing transaction: {str(e)}")
         return None
 
-
-def make_prediction(model, transaction_data):
-    """
-    Make a fraud prediction using the model.
-    Returns a prediction result dict with transaction_id, prediction, and confidence.
-    """
+def predict_fraud(model, transaction):
+    """Make a fraud prediction for a transaction."""
     try:
-        # Make prediction
-        prediction_prob = model.predict_proba(transaction_data)[0]
-        prediction = model.predict(transaction_data)[0]
+        # Preprocess transaction
+        features = preprocess_transaction(transaction)
+        if features is None:
+            return None
+            
+        # Generate a transaction ID if not present
+        if 'transaction_id' not in transaction:
+            transaction['transaction_id'] = str(uuid.uuid4())
+            
+        # Log the transaction being processed
+        logger.info(f"Processing transaction {transaction.get('transaction_id', 'unknown')}")
         
-        # Get confidence score (probability of the predicted class)
-        confidence = prediction_prob[1] if prediction == 1 else prediction_prob[0]
+        # Get prediction probabilities
+        probs = model.predict_proba(features.reshape(1, -1))[0]
         
-        return {
-            "prediction": bool(prediction),
-            "confidence": float(confidence),
-            "model_version": "1.0.0",  # Include model version
-            "timestamp": time.time()
+        # Add prediction to transaction
+        result = transaction.copy()
+        result["prediction"] = {
+            "fraud_probability": float(probs[1]),  # Probability of class 1 (fraud)
+            "is_fraudulent": bool(probs[1] > 0.5),  # Classification based on threshold
+            "timestamp": datetime.now().isoformat()
         }
+        
+        logger.info(f"Prediction completed for transaction {result.get('transaction_id')}: " +
+                  f"fraud_probability={result['prediction']['fraud_probability']:.4f}, " +
+                  f"is_fraudulent={result['prediction']['is_fraudulent']}")
+        
+        return result
     except Exception as e:
         logger.error(f"Error making prediction: {str(e)}")
         return None
 
-
-def worker_process(model, transaction):
-    """Worker process for making predictions."""
-    try:
-        # Preprocess transaction data
-        transaction_data = preprocess_transaction(transaction)
-        if transaction_data is None:
-            return None
-            
-        # Make prediction
-        prediction_result = make_prediction(model, transaction_data)
-        if prediction_result is None:
-            return None
-            
-        # Add transaction_id to the prediction result
-        prediction_result["transaction_id"] = transaction.get("transaction_id", "unknown")
-        
-        return prediction_result
-    except Exception as e:
-        logger.error(f"Error in worker process: {str(e)}")
-        return None
-
-
 def main():
     """Main entry point for the prediction service."""
-    # Initialize the queue client
-    queue_client = QueueClient(CONFIG)
+    # Initialize MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()  # Processor rank (0 is master, others are workers)
+    size = comm.Get_size()  # Total number of processors
     
-    # Authenticate with the queue service with retries
-    max_retries = 10
-    retry_delay = 5  # seconds
-    
-    for attempt in range(1, max_retries + 1):
-        logger.info(f"Authentication attempt {attempt}/{max_retries}")
-        if queue_client.authenticate():
-            logger.info("Successfully authenticated with queue service")
-            break
+    if rank == 0:  # Master process
+        logger.info(f"Starting prediction service with {size} processors (1 master + {size-1} workers)")
         
-        if attempt < max_retries:
-            logger.warning(f"Authentication failed, retrying in {retry_delay} seconds...")
-            time.sleep(retry_delay)
-        else:
-            logger.error("Failed to authenticate with queue service after multiple attempts")
+        # Initialize the file queue client
+        queue_client = FileQueueClient(CONFIG)
+        
+        # Load model (real or mock)
+        model = load_model(CONFIG["model_path"])
+        if model is None:
+            logger.error("Failed to load model, exiting")
+            sys.exit(1)
+            
+        logger.info("Prediction service initialized successfully")
+        
+        # Main processing loop
+        while True:
+            # Check both transaction queue files
+            tq1_size = queue_client.get_queue_size(queue_client.transaction_queue_file)
+            tq2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
+            
+            logger.info(f"Current queue sizes - TQ1: {tq1_size}, TQ2: {tq2_size}")
+            
+            # Determine which queue to use (use the one with more messages)
+            if tq1_size >= tq2_size and tq1_size > 0:
+                active_queue = queue_client.transaction_queue_file
+                logger.info(f"Using TQ1 queue with {tq1_size} messages")
+            elif tq2_size > 0:
+                active_queue = queue_client.transaction_queue_file2
+                logger.info(f"Using TQ2 queue with {tq2_size} messages")
+            else:
+                logger.info("Both queues are empty, waiting...")
+                time.sleep(2)  # Wait before checking again
+                continue
+            
+            # Read up to (size-1) transactions from the queue (one per worker)
+            # We use size-1 because rank 0 is the master and doesn't process transactions
+            num_workers = size - 1
+            if num_workers <= 0:
+                logger.warning("No worker processors available, running in single-process mode")
+                num_workers = 1  # Fallback to single process mode
+                
+            logger.info(f"Attempting to read up to {num_workers} transactions")
+            transactions = queue_client.pull_messages(active_queue, num_workers)
+            
+            if not transactions:
+                logger.info("Queue is empty, waiting for transactions...")
+                time.sleep(2)  # Wait before checking again
+                continue
+            
+            logger.info(f"Retrieved {len(transactions)} transactions (out of {num_workers} workers)")
+            
+            # Distribute transactions to workers
+            results = []
+            
+            if size > 1:  # If we have worker processes
+                # Send transactions to workers
+                for i, transaction in enumerate(transactions):
+                    worker_rank = (i % num_workers) + 1  # Workers start at rank 1
+                    logger.info(f"Sending transaction to worker {worker_rank}")
+                    comm.send(transaction, dest=worker_rank)
+                
+                # Send None to any workers that didn't get a transaction
+                for i in range(len(transactions), num_workers):
+                    worker_rank = i + 1
+                    comm.send(None, dest=worker_rank)
+                
+                # Collect results from workers
+                for i in range(len(transactions)):
+                    worker_rank = (i % num_workers) + 1
+                    result = comm.recv(source=worker_rank)
+                    if result is not None:
+                        results.append(result)
+                        logger.info(f"Received result from worker {worker_rank}")
+            else:  # Single process mode
+                # Process transactions in the master process
+                for transaction in transactions:
+                    try:
+                        result = predict_fraud(model, transaction)
+                        if result:
+                            results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error making prediction: {str(e)}")
+            
+            # Push results to results queue
+            logger.info(f"Pushing {len(results)} results to the results queue")
+            for result in results:
+                queue_client.push_message(queue_client.results_queue_file, result)
+            
+            logger.info(f"Completed processing batch of {len(transactions)} transactions")
+            
+            # Small delay to prevent CPU overuse
+            time.sleep(0.5)
+    
+    else:  # Worker processes
+        logger.info(f"Worker {rank} started")
+        
+        # Load model in each worker
+        model = load_model(CONFIG["model_path"])
+        if model is None:
+            logger.error(f"Worker {rank}: Failed to load model, exiting")
             sys.exit(1)
         
-    # Load model (real or mock)
-    model = load_model(CONFIG["model_path"])
-        
-    logger.info("Prediction service initialized successfully")
-    
-    # Get the number of processors to simulate
-    num_processors = CONFIG["num_processors"]
-    logger.info(f"Simulating {num_processors} worker processes")
-    
-    # Continuously process batches of transactions
-    while True:
-        # Read up to num_processors transactions from the queue
-        transactions = []
-        logger.info(f"Attempting to read up to {num_processors} transactions")
-        
-        # Try to get at least one transaction (blocking if necessary)
-        first_message = None
-        while first_message is None:
-            first_message = queue_client.pull_message(CONFIG["transaction_queue"])
-            if first_message is None:
-                logger.info("Queue is empty, waiting for a transaction...")
-                time.sleep(2)  # Wait before trying again
-        
-        # Add the first message to our transactions list
-        transactions.append(first_message)
-        
-        # Try to get more transactions up to num_processors (non-blocking)
-        for _ in range(num_processors - 1):
-            message = queue_client.pull_message(CONFIG["transaction_queue"])
-            if message:
-                transactions.append(message)
-            else:
-                # No more messages available, proceed with what we have
-                break
-        
-        logger.info(f"Retrieved {len(transactions)} transactions (out of {num_processors} processors)")
-        logger.info(f"Processing {len(transactions)} transactions")
-        
-        # Process each transaction (simulating distribution to workers)
-        results = []
-        for i, transaction in enumerate(transactions):
-            # Simulate worker ID for logging
-            worker_id = (i % num_processors) + 1
-            logger.info(f"Worker {worker_id} processing transaction {transaction.get('transaction_id', 'unknown')}")
+        # Worker processing loop
+        while True:
+            # Receive transaction from master
+            transaction = comm.recv(source=0)
             
-            # Process transaction and make prediction
-            prediction_result = worker_process(model, transaction)
+            # None means no work to do in this round
+            if transaction is None:
+                comm.send(None, dest=0)
+                continue
             
-            if prediction_result:
-                results.append(prediction_result)
-                logger.info(f"Worker {worker_id} completed prediction for transaction {transaction.get('transaction_id', 'unknown')}")
-        
-        # Gather results (simulating collection from workers)
-        logger.info(f"Gathering results from {len(results)} workers")
-        
-        # Push results to the queue
-        for prediction_result in results:
-            queue_client.push_message(CONFIG["results_queue"], prediction_result)
-            logger.info(f"Pushed prediction for transaction {prediction_result.get('transaction_id')} to results queue")
-        
-        logger.info(f"Completed processing batch of {len(transactions)} transactions")
-        
-        # Short pause between batches
-        time.sleep(1)
-
+            logger.info(f"Worker {rank} processing transaction {transaction.get('transaction_id', 'unknown')}")
+            
+            try:
+                # Process the transaction
+                result = predict_fraud(model, transaction)
+                # Send result back to master
+                comm.send(result, dest=0)
+            except Exception as e:
+                logger.error(f"Worker {rank} error: {str(e)}")
+                comm.send(None, dest=0)  # Send None to indicate error
 
 if __name__ == "__main__":
     main()

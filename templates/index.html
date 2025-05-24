@@ -1,0 +1,271 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPI Prediction Service UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        .json-display {
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            padding: 10px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-running {
+            background-color: #28a745;
+        }
+        .status-not-running {
+            background-color: #dc3545;
+        }
+        .status-unknown {
+            background-color: #ffc107;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">MPI Prediction Service UI</h1>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Queue Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>
+                            <strong>Transaction Queue 1 (TQ1):</strong> 
+                            <span class="status-indicator 
+                                {% if transaction_queue_exists %}status-running
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if transaction_queue_exists else "Does Not Exist" }}
+                            {% if transaction_queue_exists %}
+                            ({{ transaction_queue_size }} messages)
+                            {% endif %}
+                        </p>
+                        <p>
+                            <strong>Transaction Queue 2 (TQ2):</strong> 
+                            <span class="status-indicator 
+                                {% if transaction_queue2_exists %}status-running
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if transaction_queue2_exists else "Does Not Exist" }}
+                            {% if transaction_queue2_exists %}
+                            ({{ transaction_queue2_size }} messages)
+                            {% endif %}
+                        </p>
+                        <p>
+                            <strong>Results Queue (PQ1):</strong> 
+                            <span class="status-indicator 
+                                {% if results_queue_exists %}status-running
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if results_queue_exists else "Does Not Exist" }}
+                            {% if results_queue_exists %}
+                            ({{ results_queue_size }} messages)
+                            {% endif %}
+                        </p>
+                        
+                        <a href="/force_refresh" class="btn btn-sm btn-secondary">Refresh Status</a>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Push Transactions</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="pushTransactionsForm">
+                            <div class="mb-3">
+                                <label for="numTransactions" class="form-label">Number of Transactions</label>
+                                <input type="number" class="form-control" id="numTransactions" name="num_transactions" value="5" min="1" max="100">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Target Queue</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="target_queue" id="tq1" value="TQ1" checked>
+                                    <label class="form-check-label" for="tq1">
+                                        Transaction Queue 1 (TQ1)
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="target_queue" id="tq2" value="TQ2">
+                                    <label class="form-check-label" for="tq2">
+                                        Transaction Queue 2 (TQ2)
+                                    </label>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                Push Transactions
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Prediction Results</h5>
+                        <button id="refreshResultsBtn" class="btn btn-sm btn-outline-primary">
+                            Refresh Results
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="resultsContainer">
+                            <p class="text-muted">No results to display. Click "Refresh Results" to check for new predictions.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Instructions</h5>
+                    </div>
+                    <div class="card-body">
+                        <ol>
+                            <li>The system is configured to work with the following queue files:
+                                <ul>
+                                    <li><strong>Transaction Queue 1:</strong> {{ transaction_queue }}</li>
+                                    <li><strong>Transaction Queue 2:</strong> {{ transaction_queue2 }}</li>
+                                    <li><strong>Results Queue:</strong> {{ results_queue }}</li>
+                                </ul>
+                            </li>
+                            <li>Push sample transactions to either TQ1 or TQ2</li>
+                            <li>Start the MPI prediction service using one of these methods:
+                                <ul>
+                                    <li><code>mpirun -n [NUM_PROCESSORS] python prediction_service.py</code> (local mode)</li>
+                                    <li><code>docker-compose up</code> (Docker mode)</li>
+                                </ul>
+                            </li>
+                            <li>The prediction service will process transactions from the queue with the most messages</li>
+                            <li>Click "Refresh Results" to see prediction results as they are processed</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Push Transactions
+            const pushTransactionsForm = document.getElementById('pushTransactionsForm');
+            if (pushTransactionsForm) {
+                pushTransactionsForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    
+                    const submitBtn = pushTransactionsForm.querySelector('button[type="submit"]');
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = 'Pushing...';
+                    
+                    const formData = new FormData(pushTransactionsForm);
+                    
+                    fetch('/push_transactions', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert(data.message);
+                            refreshQueueStatus();
+                        } else {
+                            alert('Error: ' + data.message);
+                        }
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Push Transactions';
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error);
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = 'Push Transactions';
+                    });
+                });
+            }
+            
+            // Refresh Results
+            const refreshResultsBtn = document.getElementById('refreshResultsBtn');
+            if (refreshResultsBtn) {
+                refreshResultsBtn.addEventListener('click', function() {
+                    refreshResultsBtn.disabled = true;
+                    refreshResultsBtn.innerHTML = 'Refreshing...';
+                    
+                    fetch('/get_results')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            const resultsContainer = document.getElementById('resultsContainer');
+                            
+                            if (data.count === 0) {
+                                resultsContainer.innerHTML = '<p class="text-muted">No results found. The prediction service might still be processing or no transactions have been processed yet.</p>';
+                            } else {
+                                let html = `<p>Found ${data.count} prediction results:</p>`;
+                                
+                                data.results.forEach((result, index) => {
+                                    html += `
+                                    <div class="mb-3">
+                                        <h6>Prediction ${index + 1}</h6>
+                                        <div class="json-display">${JSON.stringify(result, null, 2)}</div>
+                                    </div>
+                                    `;
+                                });
+                                
+                                resultsContainer.innerHTML = html;
+                            }
+                            
+                            refreshQueueStatus();
+                        } else {
+                            alert('Error: ' + data.message);
+                        }
+                        refreshResultsBtn.disabled = false;
+                        refreshResultsBtn.innerHTML = 'Refresh Results';
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error);
+                        refreshResultsBtn.disabled = false;
+                        refreshResultsBtn.innerHTML = 'Refresh Results';
+                    });
+                });
+            }
+            
+            function refreshQueueStatus() {
+                fetch('/queue_status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error refreshing queue status:', error);
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+            

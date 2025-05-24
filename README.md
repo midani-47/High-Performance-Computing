@@ -1,22 +1,22 @@
 # MPI-Based Fraud Detection Service
 
-A high-performance distributed machine learning prediction service for fraud detection, built using MPI (Message Passing Interface). This service reads transaction data from a message queue, distributes prediction tasks across multiple processors/nodes, and sends prediction results back to a results queue.
+A high-performance distributed machine learning prediction service for fraud detection, built using MPI (Message Passing Interface). This service reads transaction data from local JSON files, distributes prediction tasks across multiple processors/nodes, and sends prediction results back to a results file.
 
 ## Overview
 
 This service implements a distributed approach to ML prediction using OpenMPI to scale processing across multiple processors/nodes. The service:
 
 1. Reads the pre-trained Random Forest model for fraud detection
-2. Pulls transaction messages from a queue service (implemented in Assignment 3)
+2. Reads transaction data from local JSON files (TQ1.json and TQ2.json)
 3. Distributes these transactions to worker nodes for parallel processing
 4. Gathers prediction results from workers
-5. Pushes prediction results to a results queue
+5. Writes prediction results to a results file (PQ1.json)
 
 ## Features
 
 - **Parallel Processing**: Utilizes MPI to distribute workload across multiple processors
 - **Scalable Architecture**: Supports configurable number of worker processes
-- **Queue Integration**: Seamlessly works with the message queue service from Assignment 3
+- **File-Based Queues**: Works with local JSON files for transaction data and prediction results
 - **Docker Support**: Includes containerization with Docker and multi-node setup with Docker Compose
 - **Fault Tolerance**: Handles errors gracefully and continues processing available transactions
 - **Configurable**: All parameters are configurable through environment variables or .env file
@@ -33,20 +33,38 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 ```
 /
 ├── prediction_service.py     # Main MPI-based prediction service
-├── web_ui.py                # Web interface for testing
-├── test_service.py          # Command-line test script
-├── requirements.txt          # Python dependencies
+├── web_ui_file.py           # Web interface for testing with file-based queues
+├── a3/
+│   └── queue_service/
+│       └── queue_data/       # Directory containing queue JSON files
+│           ├── TQ1.json      # Transaction Queue 1
+│           ├── TQ2.json      # Transaction Queue 2
+│           └── PQ1.json      # Prediction Results Queue
+├── mpi/
+│   └── fraud_rf_model.pkl    # Pre-trained fraud detection model
 ├── .env                      # Environment configuration
-├── start_service.sh          # Shell script to start the service
-├── Dockerfile                # Docker configuration
+├── Dockerfile                # Docker configuration for prediction service
+├── Dockerfile.web_ui        # Docker configuration for web UI
 ├── docker-compose.yml        # Multi-node Docker configuration
-├── README.md                 # This file
-└── DOCUMENTATION.md          # Detailed technical documentation
+└── README.md                 # This file
 ```
 
 ## Quick Setup (Docker-based)
 
-The entire system can be started with a single Docker Compose command:
+Before starting the Docker containers, run the initialization script to set up the necessary directories and files:
+
+```bash
+# Run the initialization script to set up the environment
+./init_setup.sh
+```
+
+This script will:
+1. Create the necessary directories for queue data and the model
+2. Generate the fraud detection model if it doesn't exist
+3. Create empty queue files if they don't exist
+4. Set proper permissions for the queue data directory
+
+After initialization, the entire system can be started with a single Docker Compose command:
 
 ```bash
 # For first-time setup (or after changes), use the --build flag
@@ -59,14 +77,13 @@ docker-compose up -d
 docker-compose logs -f
 
 # To check logs for a specific service
-docker-compose logs -f prediction_service
+docker-compose logs -f mpi_master
 ```
 
 This will automatically:
 
-1. Start the queue service on port 7501 (to avoid conflicts with existing services)
-2. Start the prediction service
-3. Launch a web UI for testing at http://localhost:7600
+1. Start the MPI master node and 5 worker nodes
+2. Launch a web UI for testing at http://localhost:7600
 
 Once started, open http://localhost:7600 in your browser to access the web UI for testing.
 
@@ -81,23 +98,25 @@ brew install open-mpi  # macOS
 sudo apt-get install openmpi-bin libopenmpi-dev  # Ubuntu
 
 # Install Python dependencies
-pip install -r requirements.txt
+pip install mpi4py numpy pandas scikit-learn python-dotenv joblib
 
 # Start the prediction service with 6 processes (1 master + 5 workers)
 mpirun -n 6 python prediction_service.py
+
+# Start the web UI in a separate terminal
+python web_ui_file.py
 ```
 
 ## Configuration
 
 The service can be configured through environment variables or the `.env` file:
 
-- `NUM_PROCESSORS`: Number of worker processors (default: 5)
-- `QUEUE_SERVICE_URL`: URL of the queue service (default: http://localhost:7501)
-- `TRANSACTION_QUEUE`: Name of the transaction queue (default: transactions)
-- `RESULTS_QUEUE`: Name of the results queue (default: predictions)
+- `NUM_PROCESSORS`: Number of processors including master (default: 6)
+- `QUEUE_DATA_DIR`: Directory containing queue JSON files (default: ./a3/queue_service/queue_data)
+- `TRANSACTION_QUEUE_FILE`: Name of the first transaction queue file (default: TQ1.json)
+- `TRANSACTION_QUEUE_FILE2`: Name of the second transaction queue file (default: TQ2.json)
+- `RESULTS_QUEUE_FILE`: Name of the prediction results queue file (default: PQ1.json)
 - `MODEL_PATH`: Path to the pre-trained model (default: ./mpi/fraud_rf_model.pkl)
-- `AUTH_USERNAME`: Username for queue service authentication (default: admin)
-- `AUTH_PASSWORD`: Password for queue service authentication (default: admin_password)
 
 ## Usage
 
@@ -106,15 +125,15 @@ The service can be configured through environment variables or the `.env` file:
 1. Run `docker-compose up --build -d` to start everything (first time)
 2. Open http://localhost:7600 in your browser to access the web UI
 3. Use the web UI to:
-   - Set up the transaction and prediction queues (if they don't exist)
-   - Push sample transactions to the transaction queue
-   - Monitor prediction results as they are processed
+   - View the status of the transaction and prediction files
+   - Push sample transactions to the transaction files (TQ1.json or TQ2.json)
+   - Monitor prediction results as they are processed and written to PQ1.json
 
 ### Understanding the Workflow
 
-1. **Port 7501**: This is where the queue service runs. It handles the transaction and prediction queues.
-2. **Port 7600**: This is where the web UI runs. It provides a user-friendly interface to interact with the queue service.
-3. **Prediction Service**: This service reads transactions from the queue, processes them using simulated parallel processing, and sends results back to the prediction queue.
+1. **File-Based Queues**: The system uses JSON files in the `a3/queue_service/queue_data` directory to store transactions and prediction results.
+2. **Port 7600**: This is where the web UI runs. It provides a user-friendly interface to interact with the queue files.
+3. **MPI Prediction Service**: This service reads transactions from the queue files, processes them using parallel processing with MPI, and writes results back to the prediction results file.
 
 ### Sample Transaction Format
 
@@ -124,8 +143,10 @@ The prediction service expects transactions in this format:
 {
   "transaction_id": "unique-id-123",
   "customer_id": "CUST_1234",
+  "customer_name": "John Doe",
   "amount": 150.75,
-  "vendor_id": "VENDOR_456"
+  "vendor_id": "VENDOR_456",
+  "date": "2025-05-24"
 }
 ```
 
@@ -135,14 +156,11 @@ The web UI will automatically generate sample transactions in the correct format
 
 The web-based user interface is automatically started as part of the Docker setup at http://localhost:7600. It provides:
 
-- Status monitoring of the queue service and queues
-- Queue creation functionality
+- Status monitoring of the transaction and prediction files
 - Sample transaction generation and submission
 - Prediction result viewing
 
 This UI makes it easy to test the entire system without needing to use the command line for testing.
-
-See [DOCUMENTATION.md](DOCUMENTATION.md) for more detailed information about the implementation and usage of this service.
 
 
 

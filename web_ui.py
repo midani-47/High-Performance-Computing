@@ -176,31 +176,46 @@ class QueueServiceClient:
     
     def push_message(self, queue_name, message):
         """Push a message to the specified queue."""
-        try:
-            response = requests.post(
-                f"{self.base_url}/queues/{queue_name}/push",
-                headers=self.get_headers(),
-                json=message
-            )
-            
-            if response.status_code == 404:
-                # Queue might not exist
-                logger.warning(f"Queue {queue_name} not found")
+        max_retries = 3
+        retry_count = 0
+        retry_delay = 1.0  # Start with 1 second delay
+        
+        while retry_count < max_retries:
+            try:
+                response = requests.post(
+                    f"{self.base_url}/queues/{queue_name}/push",
+                    headers=self.get_headers(),
+                    json={"message": message},
+                    timeout=10  # Add timeout to avoid hanging requests
+                )
+                
+                if response.status_code == 429:  # Too Many Requests
+                    retry_count += 1
+                    logger.warning(f"Rate limited when pushing to {queue_name}, attempt {retry_count}/{max_retries}")
+                    if retry_count < max_retries:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        logger.error(f"Failed to push message after {max_retries} retries due to rate limiting")
+                        return False
+                        
+                response.raise_for_status()
+                logger.info(f"Message pushed to {queue_name} successfully")
+                return True
+                
+            except requests.HTTPError as e:
+                if e.response.status_code == 401:
+                    # Token expired, re-authenticate
+                    self.authenticate()
+                    continue  # Retry with new token
+                logger.error(f"Error pushing message: {str(e)}")
+                return False
+            except Exception as e:
+                logger.error(f"Error pushing message: {str(e)}")
                 return False
                 
-            response.raise_for_status()
-            logger.info(f"Message pushed to {queue_name} successfully")
-            return True
-        except requests.HTTPError as e:
-            if e.response.status_code == 401:
-                # Token expired, re-authenticate
-                self.authenticate()
-                return self.push_message(queue_name, message)
-            logger.error(f"Error pushing message: {str(e)}")
-            return False
-        except Exception as e:
-            logger.error(f"Error pushing message: {str(e)}")
-            return False
+        return False  # Exhausted retries
     
     def pull_message(self, queue_name):
         """Pull a message from the specified queue."""
@@ -373,52 +388,99 @@ def setup_queues():
 def push_transactions():
     """Push sample transactions to the transaction queue."""
     try:
+        # Get number of transactions to push
         num_transactions = int(request.form.get('num_transactions', 10))
-    except ValueError:
-        num_transactions = 10
-    
-    client = QueueServiceClient(CONFIG)
-    if not client.authenticate():
-        return jsonify({"success": False, "message": "Failed to authenticate with queue service"})
-    
-    # Generate and push transactions
-    successful = 0
-    for i in range(num_transactions):
-        transaction = generate_sample_transaction()
-        if client.push_message(CONFIG['transaction_queue'], transaction):
-            successful += 1
-    
-    if successful == 0:
-        return jsonify({"success": False, "message": "Failed to push any transactions"})
-    
-    return jsonify({
-        "success": True, 
-        "message": f"Successfully pushed {successful} out of {num_transactions} transactions"
-    })
+        
+        # Validate
+        if num_transactions <= 0 or num_transactions > 100:
+            return jsonify({"success": False, "message": "Number of transactions must be between 1 and 100"})
+        
+        admin_client = QueueServiceClient(CONFIG, use_admin=True)
+        if not admin_client.authenticate():
+            return jsonify({"success": False, "message": "Failed to authenticate with queue service"})
+        
+        # Push transactions with a slight delay between each to avoid rate limiting
+        success_count = 0
+        for i in range(num_transactions):
+            transaction = generate_sample_transaction()
+            logger.info(f"Pushing transaction {i+1}/{num_transactions}: {transaction}")
+            
+            if admin_client.push_message(CONFIG['transaction_queue'], transaction):
+                success_count += 1
+                
+            # Add a small delay between requests to avoid rate limiting
+            if i < num_transactions - 1:  # No need to delay after the last one
+                time.sleep(0.5)  # 500ms delay between requests
+        
+        if success_count == 0:
+            return jsonify({"success": False, "message": "Failed to push any transactions"})
+        
+        # Wait a moment to let prediction service process the transactions
+        time.sleep(1)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Successfully pushed {success_count} out of {num_transactions} transactions."
+        })
+    except Exception as e:
+        logger.error(f"Error in push_transactions: {str(e)}")
+        return jsonify({"success": False, "message": str(e)})
 
 
-@app.route('/get_results', methods=['GET'])
+@app.route('/get_results')
 def get_results():
     """Get prediction results from the results queue."""
-    client = QueueServiceClient(CONFIG)
-    if not client.authenticate():
-        return jsonify({"success": False, "message": "Failed to authenticate with queue service"})
-    
-    # Pull prediction results
-    results = []
-    max_results = 10  # Limit to 10 results to avoid overwhelming the UI
-    
-    for _ in range(max_results):
-        result = client.pull_message(CONFIG['results_queue'])
-        if not result:
-            break
-        results.append(result)
-    
-    return jsonify({
-        "success": True,
-        "count": len(results),
-        "results": results
-    })
+    try:
+        # Pull results from the queue
+        admin_client = QueueServiceClient(CONFIG, use_admin=True)
+        if not admin_client.authenticate():
+            return jsonify({"success": False, "message": "Failed to authenticate with queue service"})
+            
+        results = []
+        max_results = 20  # Limit the number of results to avoid overwhelming the UI
+        
+        # First, check if the queue exists
+        queues = admin_client.list_queues()
+        queue_exists = any(q.get('name') == CONFIG['results_queue'] for q in queues)
+        
+        if not queue_exists:
+            logger.warning(f"Results queue {CONFIG['results_queue']} doesn't exist")
+            return jsonify({
+                "success": True,
+                "count": 0,
+                "results": [],
+                "message": f"Results queue {CONFIG['results_queue']} doesn't exist"
+            })
+        
+        # Get queue info to see if there are messages
+        queue_info = admin_client.get_queue_info(CONFIG['results_queue'])
+        logger.info(f"Results queue info: {queue_info}")
+        
+        # Try to pull messages multiple times with retries
+        for i in range(max_results):
+            result = None
+            # Try a few times with delays
+            for attempt in range(3):
+                result = admin_client.pull_message(CONFIG['results_queue'])
+                if result:
+                    break
+                time.sleep(0.2)  # Short delay between attempts
+                
+            if result:
+                logger.info(f"Retrieved result {i+1}: {result}")
+                results.append(result)
+            else:
+                logger.info(f"No more results available after {i} pulls")
+                break
+                
+        return jsonify({
+            "success": True,
+            "count": len(results),
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error in get_results: {str(e)}")
+        return jsonify({"success": False, "message": str(e)})
 
 
 @app.route('/queue_status')
