@@ -175,7 +175,6 @@ def generate_sample_transaction():
     amount = random.uniform(100, 10000)
     transaction_count = random.randint(1, 50)
     time_since_last_transaction = random.randint(1, 1000)
-    customer_risk_score = random.uniform(0, 1)  # Add customer risk score
     vendor_risk_score = random.uniform(0, 1)
     
     # Create a transaction with the required fields for the fraud detection model
@@ -184,7 +183,6 @@ def generate_sample_transaction():
         "amount": round(amount, 2),
         "transaction_count": transaction_count,
         "time_since_last_transaction": time_since_last_transaction,
-        "customer_risk_score": round(customer_risk_score, 2),  # Include customer risk score
         "vendor_risk_score": round(vendor_risk_score, 2)
     }
 
@@ -204,13 +202,16 @@ def index():
     transaction_queue2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
     results_queue_size = queue_client.get_queue_size(queue_client.results_queue_file)
     
-    return render_template('index.html', 
+    return render_template('index.html',
                           transaction_queue_exists=transaction_queue_exists,
-                          transaction_queue_size=transaction_queue_size,
                           transaction_queue2_exists=transaction_queue2_exists,
-                          transaction_queue2_size=transaction_queue2_size,
                           results_queue_exists=results_queue_exists,
-                          results_queue_size=results_queue_size)
+                          transaction_queue_size=transaction_queue_size,
+                          transaction_queue2_size=transaction_queue2_size,
+                          results_queue_size=results_queue_size,
+                          transaction_queue=CONFIG['transaction_queue_file'],
+                          transaction_queue2=CONFIG['transaction_queue_file2'],
+                          results_queue=CONFIG['results_queue_file'])
 
 @app.route('/push_transactions', methods=['POST'])
 def push_transactions():
@@ -251,12 +252,15 @@ def push_transactions():
         else:
             return jsonify({"success": False, "message": "Failed to push any transactions"})
     
+        return jsonify({
+            "success": True,
+            "message": f"Successfully pushed {success_count} out of {num_transactions} transactions to {os.path.basename(queue_file)}."
+        })
     except Exception as e:
         logger.error(f"Error in push_transactions: {str(e)}")
-        return jsonify({"success": False, "message": f"Error: {str(e)}"})
+        return jsonify({"success": False, "message": str(e)})
 
 @app.route('/get_results')
-def get_results():
     """Get prediction results from the results queue."""
     try:
         # Check if results queue exists
@@ -329,38 +333,20 @@ def get_results():
             "message": f"Error: {str(e)}",
             "count": 0,
             "results": []
-        })
-
-@app.route('/queue_status')
-def queue_status():
-    """Get the status of the queues."""
-    try:
-        # Check if queue files exist
-        transaction_queue_exists = queue_client.queue_exists(queue_client.transaction_queue_file)
-        transaction_queue2_exists = queue_client.queue_exists(queue_client.transaction_queue_file2)
-        results_queue_exists = queue_client.queue_exists(queue_client.results_queue_file)
-        
-        # Get queue sizes
-        transaction_queue_size = queue_client.get_queue_size(queue_client.transaction_queue_file)
-        transaction_queue2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
-        results_queue_size = queue_client.get_queue_size(queue_client.results_queue_file)
-        
-        return jsonify({
-            "success": True,
             "transaction_queue": {
                 "exists": transaction_queue_exists,
                 "size": transaction_queue_size,
-                "file": os.path.basename(queue_client.transaction_queue_file)
+                "name": CONFIG['transaction_queue_file']
             },
             "transaction_queue2": {
                 "exists": transaction_queue2_exists,
                 "size": transaction_queue2_size,
-                "file": os.path.basename(queue_client.transaction_queue_file2)
+                "name": CONFIG['transaction_queue_file2']
             },
             "results_queue": {
                 "exists": results_queue_exists,
                 "size": results_queue_size,
-                "file": os.path.basename(queue_client.results_queue_file)
+                "name": CONFIG['results_queue_file']
             }
         })
     except Exception as e:
@@ -370,7 +356,25 @@ def queue_status():
 @app.route('/force_refresh')
 def force_refresh():
     """Force refresh the queue status with caching disabled."""
-    return redirect(url_for('index', _=int(time.time())))
+    try:
+        # Log queue status
+        transaction_queue_exists = queue_client.queue_exists(queue_client.transaction_queue_file)
+        transaction_queue2_exists = queue_client.queue_exists(queue_client.transaction_queue_file2)
+        results_queue_exists = queue_client.queue_exists(queue_client.results_queue_file)
+        
+        transaction_queue_size = queue_client.get_queue_size(queue_client.transaction_queue_file)
+        transaction_queue2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
+        results_queue_size = queue_client.get_queue_size(queue_client.results_queue_file)
+        
+        logger.info(f"Force refresh - TQ1 exists: {transaction_queue_exists}, size: {transaction_queue_size}")
+        logger.info(f"Force refresh - TQ2 exists: {transaction_queue2_exists}, size: {transaction_queue2_size}")
+        logger.info(f"Force refresh - PQ1 exists: {results_queue_exists}, size: {results_queue_size}")
+        
+        # Redirect back to main page with cache busting query parameter
+        return redirect(f"/?refresh={int(time.time())}")
+    except Exception as e:
+        logger.error(f"Force refresh error: {str(e)}")
+        return jsonify({"success": False, "message": str(e)})
 
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist
@@ -380,25 +384,26 @@ if __name__ == '__main__':
     template_path = os.path.join('templates', 'index.html')
     if not os.path.exists(template_path):
         with open(template_path, 'w') as f:
-            f.write('''<!DOCTYPE html>
+            f.write('''
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MPI Fraud Detection Service</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>MPI Prediction Service UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
-            padding-top: 20px;
-            padding-bottom: 20px;
+            padding-top: 2rem;
+            padding-bottom: 2rem;
         }
         .json-display {
             background-color: #f8f9fa;
-            padding: 10px;
             border-radius: 5px;
+            padding: 10px;
             font-family: monospace;
             white-space: pre-wrap;
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
         }
         .status-indicator {
@@ -417,19 +422,11 @@ if __name__ == '__main__':
         .status-unknown {
             background-color: #ffc107;
         }
-        .fraud-alert {
-            color: #dc3545;
-            font-weight: bold;
-        }
-        .fraud-safe {
-            color: #28a745;
-            font-weight: bold;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4">MPI Fraud Detection Service</h1>
+        <h1 class="mb-4">MPI Prediction Service UI</h1>
         
         <div class="row mb-4">
             <div class="col-md-6">
@@ -442,38 +439,30 @@ if __name__ == '__main__':
                             <strong>Transaction Queue 1 (TQ1):</strong> 
                             <span class="status-indicator 
                                 {% if transaction_queue_exists %}status-running
-                                {% else %}status-not-running{% endif %}">
-                            </span>
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if transaction_queue_exists else "Does Not Exist" }}
                             {% if transaction_queue_exists %}
-                            Active ({{ transaction_queue_size }} messages)
-                            {% else %}
-                            Not active
+                            ({{ transaction_queue_size }} messages)
                             {% endif %}
                         </p>
-                        
                         <p>
                             <strong>Transaction Queue 2 (TQ2):</strong> 
                             <span class="status-indicator 
                                 {% if transaction_queue2_exists %}status-running
-                                {% else %}status-not-running{% endif %}">
-                            </span>
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if transaction_queue2_exists else "Does Not Exist" }}
                             {% if transaction_queue2_exists %}
-                            Active ({{ transaction_queue2_size }} messages)
-                            {% else %}
-                            Not active
+                            ({{ transaction_queue2_size }} messages)
                             {% endif %}
                         </p>
-                        
                         <p>
                             <strong>Results Queue (PQ1):</strong> 
                             <span class="status-indicator 
                                 {% if results_queue_exists %}status-running
-                                {% else %}status-not-running{% endif %}">
-                            </span>
+                                {% else %}status-not-running{% endif %}"></span>
+                            {{ "Exists" if results_queue_exists else "Does Not Exist" }}
                             {% if results_queue_exists %}
-                            Active ({{ results_queue_size }} messages)
-                            {% else %}
-                            Not active
+                            ({{ results_queue_size }} messages)
                             {% endif %}
                         </p>
                         
@@ -485,83 +474,94 @@ if __name__ == '__main__':
             <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
-                        <h5>MPI Service Instructions</h5>
+                        <h5>Push Transactions</h5>
                     </div>
                     <div class="card-body">
-                        <p>This web UI allows you to interact with the MPI-based fraud detection service:</p>
-                        <ol>
-                            <li>Use the <strong>Push Transactions</strong> form to send sample transactions to the queue</li>
-                            <li>The MPI service will process these transactions using multiple processors</li>
-                            <li>View the prediction results in the <strong>Prediction Results</strong> section</li>
-                        </ol>
-                        <p class="text-info">The MPI service reads transactions from the queue files, processes them in parallel, and writes results back to the results queue.</p>
+                        <form id="pushTransactionsForm">
+                            <div class="mb-3">
+                                <label for="numTransactions" class="form-label">Number of Transactions</label>
+                                <input type="number" class="form-control" id="numTransactions" name="num_transactions" value="5" min="1" max="100">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Target Queue</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="target_queue" id="tq1" value="TQ1" checked>
+                                    <label class="form-check-label" for="tq1">
+                                        Transaction Queue 1 (TQ1)
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="target_queue" id="tq2" value="TQ2">
+                                    <label class="form-check-label" for="tq2">
+                                        Transaction Queue 2 (TQ2)
+                                    </label>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                Push Transactions
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
         </div>
         
         <div class="row mb-4">
-            <div class="col-md-6">
+            <div class="col-12">
                 <div class="card">
-                    <div class="card-header">
-                        <h5>Push Transactions</h5>
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Prediction Results</h5>
+                        <button id="refreshResultsBtn" class="btn btn-sm btn-outline-primary">
+                            Refresh Results
+                        </button>
                     </div>
                     <div class="card-body">
-                        <form id="pushTransactionsForm">
-                            <div class="mb-3">
-                                <label for="count" class="form-label">Number of Transactions</label>
-                                <input type="number" class="form-control" id="count" name="count" min="1" max="10" value="1">
-                                <div class="form-text">How many random transactions to generate (1-10)</div>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="queue" class="form-label">Target Queue</label>
-                                <select class="form-select" id="queue" name="queue">
-                                    <option value="TQ1">Transaction Queue 1 (TQ1)</option>
-                                    <option value="TQ2">Transaction Queue 2 (TQ2)</option>
-                                </select>
-                            </div>
-                            
-                            <button type="submit" class="btn btn-primary" id="submitBtn">Push Transactions</button>
-                        </form>
-                        
-                        <div id="transactionResult" class="mt-3" style="display: none;">
-                            <h6>Pushed Transactions:</h6>
-                            <div id="transactionResultContent" class="json-display"></div>
+                        <div id="resultsContainer">
+                            <p class="text-muted">No results to display. Click "Refresh Results" to check for new predictions.</p>
                         </div>
                     </div>
                 </div>
             </div>
-            
-            <div class="col-md-6">
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
                 <div class="card">
                     <div class="card-header">
-                        <h5>Prediction Results</h5>
+                        <h5>Instructions</h5>
                     </div>
                     <div class="card-body">
-                        <button id="refreshResultsBtn" class="btn btn-primary mb-3">Refresh Results</button>
-                        
-                        <div id="resultsContainer">
-                            <p class="text-muted">Click "Refresh Results" to check for new prediction results.</p>
-                        </div>
+                        <ol>
+                            <li>The system is configured to work with the following queue files:
+                                <ul>
+                                    <li><strong>Transaction Queue 1:</strong> {{ transaction_queue }}</li>
+                                    <li><strong>Transaction Queue 2:</strong> {{ transaction_queue2 }}</li>
+                                    <li><strong>Results Queue:</strong> {{ results_queue }}</li>
+                                </ul>
+                            </li>
+                            <li>Push sample transactions to either TQ1 or TQ2 using the form below</li>
+                            <li>The MPI prediction service should already be running in the background (started with <code>docker-compose up</code>)</li>
+                            <li>After pushing transactions, wait a few seconds and then click "Refresh Results" to see the predictions</li>
+                            <li>If you don't see results, make sure the MPI service is running with <code>docker-compose ps</code></li>
+                            <li>The prediction service will process transactions from the queue with the most messages</li>
+                            <li>Click "Refresh Results" to see prediction results as they are processed</li>
+                        </ol>
                     </div>
                 </div>
             </div>
         </div>
     </div>
     
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Push Transactions Form
+            // Push Transactions
             const pushTransactionsForm = document.getElementById('pushTransactionsForm');
-            const submitBtn = document.getElementById('submitBtn');
-            const transactionResult = document.getElementById('transactionResult');
-            const transactionResultContent = document.getElementById('transactionResultContent');
-            
             if (pushTransactionsForm) {
                 pushTransactionsForm.addEventListener('submit', function(e) {
                     e.preventDefault();
                     
+                    const submitBtn = pushTransactionsForm.querySelector('button[type="submit"]');
                     submitBtn.disabled = true;
                     submitBtn.innerHTML = 'Pushing...';
                     
@@ -574,11 +574,7 @@ if __name__ == '__main__':
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            // Show the pushed transactions
-                            transactionResult.style.display = 'block';
-                            transactionResultContent.textContent = JSON.stringify(data.transactions, null, 2);
-                            
-                            // Refresh the queue status
+                            alert(data.message);
                             refreshQueueStatus();
                         } else {
                             alert('Error: ' + data.message);
@@ -608,30 +604,15 @@ if __name__ == '__main__':
                             const resultsContainer = document.getElementById('resultsContainer');
                             
                             if (data.count === 0) {
-                                if (data.message) {
-                                    resultsContainer.innerHTML = `<p class="text-muted">${data.message}</p>`;
-                                } else {
-                                    resultsContainer.innerHTML = '<p class="text-muted">No results found. The prediction service might still be processing or no transactions have been processed yet.</p>';
-                                }
+                                resultsContainer.innerHTML = '<p class="text-muted">No results found. The prediction service might still be processing or no transactions have been processed yet.</p>';
                             } else {
                                 let html = `<p>Found ${data.count} prediction results:</p>`;
                                 
                                 data.results.forEach((result, index) => {
-                                    const fraudClass = result.is_fraud ? 'fraud-alert' : 'fraud-safe';
-                                    const fraudText = result.is_fraud ? 'FRAUD DETECTED' : 'No fraud detected';
-                                    
                                     html += `
-                                    <div class="card mb-3">
-                                        <div class="card-header d-flex justify-content-between align-items-center">
-                                            <h6 class="mb-0">Transaction: ${result.transaction_id}</h6>
-                                            <span class="${fraudClass}">${fraudText}</span>
-                                        </div>
-                                        <div class="card-body">
-                                            <p><strong>Fraud Probability:</strong> ${result.fraud_probability_display}</p>
-                                            <p><strong>Timestamp:</strong> ${result.timestamp}</p>
-                                            <p><strong>Details:</strong></p>
-                                            <div class="json-display">${JSON.stringify(result.details, null, 2)}</div>
-                                        </div>
+                                    <div class="mb-3">
+                                        <h6>Prediction ${index + 1}</h6>
+                                        <div class="json-display">${JSON.stringify(result, null, 2)}</div>
                                     </div>
                                     `;
                                 });

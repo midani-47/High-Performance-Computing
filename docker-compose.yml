@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3'
 
 services:
   # Single container running MPI processes
@@ -6,7 +6,7 @@ services:
     build: .
     container_name: mpi_service
     volumes:
-      - ./mpi:/app/mpi:ro
+      - ./mpi:/app/mpi:rw
       - ./a3:/app/a3:rw
     environment:
       - NUM_PROCESSORS=6  # Total processors (1 master + 5 workers)
@@ -15,13 +15,12 @@ services:
       - TRANSACTION_QUEUE_FILE2=TQ2.json
       - RESULTS_QUEUE_FILE=PQ1.json
       - MODEL_PATH=/app/mpi/fraud_rf_model.pkl
-    # Run MPI with all processes in a single container
-    command: mpirun --allow-run-as-root -n 6 python3 prediction_service.py
+      - PYTHONUNBUFFERED=1
     networks:
       - mpi_network
     restart: always  # Ensure the service keeps trying to restart until successful
-  
-  # Web UI for testing
+
+  # Web UI service
   web_ui:
     build:
       context: .
@@ -31,15 +30,18 @@ services:
       - "7600:7600"
     volumes:
       - ./a3:/app/a3:rw
+      - ./web_ui_file.py:/app/web_ui_file.py:ro
     environment:
       - QUEUE_DATA_DIR=/app/a3/queue_service/queue_data
       - TRANSACTION_QUEUE_FILE=TQ1.json
       - TRANSACTION_QUEUE_FILE2=TQ2.json
       - RESULTS_QUEUE_FILE=PQ1.json
-    command: python3 web_ui_file.py
+    command: python web_ui_file.py
     networks:
       - mpi_network
     restart: always  # Ensure the service keeps trying to restart until successful
+    depends_on:
+      - mpi_service
 
 networks:
   mpi_network:

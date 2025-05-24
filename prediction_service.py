@@ -158,23 +158,54 @@ class FileQueueClient:
 def load_model(model_path):
     """Load the pre-trained fraud detection model."""
     try:
-        with open(model_path, 'rb') as f:
-            model = pickle.load(f)
-        logger.info(f"Model loaded from {model_path}")
+        logger.info(f"Loading model from {model_path}")
+        # Use joblib instead of pickle for better compatibility with scikit-learn models
+        import joblib
+        model = joblib.load(model_path)
+        logger.info("Model loaded successfully using joblib")
         return model
     except Exception as e:
-        logger.warning(f"Could not load model from {model_path}: {str(e)}")
-        logger.info("Using a mock model class instead")
+        logger.warning(f"Could not load model from {model_path} using joblib: {str(e)}")
+        logger.info("Trying with pickle as fallback...")
         
-        # Create a mock model class that implements predict_proba
-        class MockModel:
-            def predict_proba(self, features):
-                # For each input, return probability of class 0 (legitimate) and class 1 (fraudulent)
-                batch_size = len(features) if hasattr(features, '__len__') else 1
-                # Mostly legitimate (90% chance) with some fraudulent (10% chance)
-                return np.array([[0.9, 0.1] for _ in range(batch_size)])
+        try:
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+            logger.info("Model loaded successfully using pickle")
+            return model
+        except Exception as e1:
+            logger.warning(f"Could not load model using pickle: {str(e1)}")
+            logger.info("Attempting to create a new model...")
+            
+            # Try to generate a new model using create_model.py
+            try:
+                import subprocess
+                import os
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                subprocess.run(["python", "create_model.py"], check=True)
+                logger.info("Model creation completed, trying to load again with joblib")
                 
-        return MockModel()
+                # Try loading again with joblib
+                import joblib
+                model = joblib.load(model_path)
+                logger.info("Model loaded successfully after creation")
+                return model
+            except Exception as e2:
+                logger.warning(f"Failed to create and load model: {str(e2)}")
+                logger.info("Falling back to mock model")
+                
+                # Create a mock model class for testing when the real model is not available
+                class MockModel:
+                    def predict_proba(self, features):
+                        # Always return a low probability of fraud (0.1) for testing
+                        return np.array([[0.9, 0.1]] * len(features))
+                    
+                    def predict(self, features):
+                        # Always predict not fraud (0) for testing
+                        return np.zeros(len(features))
+                
+                return MockModel()
 
 def preprocess_transaction(transaction):
     """
@@ -191,13 +222,16 @@ def preprocess_transaction(transaction):
             logger.error(f"Invalid transaction format: {type(transaction)}")
             return None
             
-        # Extract basic features (amount, customer_id, vendor_id)
+        # Extract all required features for the model
         amount = float(transaction.get('amount', 0))
+        transaction_count = float(transaction.get('transaction_count', 0))
+        customer_risk_score = float(transaction.get('customer_risk_score', 0.5))  # Default to medium risk
+        vendor_risk_score = float(transaction.get('vendor_risk_score', 0.5))  # Default to medium risk
         
-        # Create a feature vector (in a real system, this would be more complex)
-        # For simplicity, we'll just use the transaction amount as our feature
-        features = np.array([amount])
+        # Create a feature vector with all 4 required features
+        features = np.array([amount, transaction_count, customer_risk_score, vendor_risk_score]).reshape(1, -1)
         
+        logger.info(f"Preprocessed features: {features}")
         return features
     except Exception as e:
         logger.error(f"Error preprocessing transaction: {str(e)}")
@@ -246,102 +280,92 @@ def main():
     rank = comm.Get_rank()  # Processor rank (0 is master, others are workers)
     size = comm.Get_size()  # Total number of processors
     
-    # Log MPI configuration
-    logger.info(f"MPI initialized with {size} processes, current rank: {rank}")
-    
-    # Set flag for MPI availability (always true since we're using mpi4py)
     mpi_available = True
+    num_workers = size - 1 if size > 1 else 1  # Number of worker processes
+    
+    logger.info(f"MPI Rank: {rank}, Size: {size}, Workers: {num_workers}")
+    
+    # Initialize file queue client
+    queue_client = FileQueueClient(CONFIG)
+    
+    # Load the model
+    model_path = CONFIG["model_path"]
     
     if rank == 0:  # Master process
-        logger.info(f"Starting prediction service with {size} processors (1 master + {size-1} workers)")
+        logger.info("Starting master process")
         
-        # Initialize the file queue client
-        queue_client = FileQueueClient(CONFIG)
-        
-        # Load model (real or mock)
-        model = load_model(CONFIG["model_path"])
-        if model is None:
-            logger.error("Failed to load model, exiting")
-            sys.exit(1)
-            
-        logger.info("Prediction service initialized successfully")
+        # Master doesn't need to load the model, only workers do
+        logger.info("Master process initialized successfully")
         
         # Main processing loop
         while True:
-            # Check both transaction queue files
+            # Check both transaction queues
             tq1_size = queue_client.get_queue_size(queue_client.transaction_queue_file)
             tq2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
             
             logger.info(f"Current queue sizes - TQ1: {tq1_size}, TQ2: {tq2_size}")
             
-            # Determine which queue to use (use the one with more messages)
+            # Choose the queue with more messages, or TQ1 if they're equal
             if tq1_size >= tq2_size and tq1_size > 0:
-                active_queue = queue_client.transaction_queue_file
-                logger.info(f"Using TQ1 queue with {tq1_size} messages")
+                queue_file = queue_client.transaction_queue_file
+                queue_size = tq1_size
             elif tq2_size > 0:
-                active_queue = queue_client.transaction_queue_file2
-                logger.info(f"Using TQ2 queue with {tq2_size} messages")
+                queue_file = queue_client.transaction_queue_file2
+                queue_size = tq2_size
             else:
                 logger.info("Both queues are empty, waiting...")
                 time.sleep(2)  # Wait before checking again
                 continue
             
-            # Read up to (size-1) transactions from the queue (one per worker)
-            # We use size-1 because rank 0 is the master and doesn't process transactions
-            num_workers = size - 1
-            if num_workers <= 0:
-                logger.warning("No worker processors available, running in single-process mode")
-                num_workers = 1  # Fallback to single process mode
-                
-            logger.info(f"Attempting to read up to {num_workers} transactions")
-            transactions = queue_client.pull_messages(active_queue, num_workers)
+            # Determine how many transactions to pull (up to the number of workers)
+            batch_size = min(queue_size, num_workers)
+            logger.info(f"Pulling {batch_size} transactions from queue")
+            
+            # Pull transactions from the queue
+            transactions = queue_client.pull_messages(queue_file, batch_size)
             
             if not transactions:
                 logger.info("Queue is empty, waiting for transactions...")
                 time.sleep(2)  # Wait before checking again
                 continue
             
-            logger.info(f"Retrieved {len(transactions)} transactions (out of {num_workers} workers)")
+            logger.info(f"Retrieved {len(transactions)} transactions for {num_workers} workers")
             
             # Distribute transactions to workers
             results = []
             
-            if mpi_available and size > 1:  # If we have worker processes and MPI is available
-                # Send transactions to workers
-                for i, transaction in enumerate(transactions):
-                    worker_rank = (i % num_workers) + 1  # Workers start at rank 1
-                    logger.info(f"Sending transaction to worker {worker_rank}")
+            # Send transactions to workers
+            for i, transaction in enumerate(transactions):
+                worker_rank = (i % num_workers) + 1  # Workers start at rank 1
+                if worker_rank < size:  # Make sure we don't send to non-existent workers
+                    logger.info(f"Sending transaction {transaction.get('id', 'unknown')} to worker {worker_rank}")
                     comm.send(transaction, dest=worker_rank)
-                
-                # Send None to any workers that didn't get a transaction
-                for i in range(len(transactions), num_workers):
-                    worker_rank = i + 1
+            
+            # Send None to any workers that didn't get a transaction
+            for i in range(len(transactions), num_workers):
+                worker_rank = i + 1
+                if worker_rank < size:  # Make sure we don't send to non-existent workers
                     comm.send(None, dest=worker_rank)
-                
-                # Collect results from workers
-                for i in range(len(transactions)):
-                    worker_rank = (i % num_workers) + 1
+            
+            # Collect results from workers
+            for i in range(min(len(transactions), num_workers)):
+                worker_rank = (i % num_workers) + 1
+                if worker_rank < size:  # Make sure we don't receive from non-existent workers
                     result = comm.recv(source=worker_rank)
                     if result is not None:
+                        logger.info(f"Received result from worker {worker_rank} for transaction {result.get('transaction_id', 'unknown')}")
                         results.append(result)
-                        logger.info(f"Received result from worker {worker_rank}")
-            else:  # Single process mode (either no MPI or only one process)
-                # Process transactions in the master process
-                logger.info(f"Processing {len(transactions)} transactions in single-process mode")
-                for transaction in transactions:
-                    try:
-                        # Extract the actual transaction content from the message
-                        transaction_content = transaction.get('content', transaction)
-                        result = predict_fraud(model, transaction_content)
-                        if result:
-                            results.append(result)
-                    except Exception as e:
-                        logger.error(f"Error making prediction: {str(e)}")
+                    else:
+                        logger.warning(f"Worker {worker_rank} returned None result")
             
             # Push results to results queue
-            logger.info(f"Pushing {len(results)} results to the results queue")
-            for result in results:
-                queue_client.push_message(queue_client.results_queue_file, result)
+            if results:
+                logger.info(f"Pushing {len(results)} results to the results queue")
+                for result in results:
+                    queue_client.push_message(queue_client.results_queue_file, result)
+                logger.info(f"Successfully pushed {len(results)} results to queue")
+            else:
+                logger.warning("No valid results received from workers")
             
             logger.info(f"Completed processing batch of {len(transactions)} transactions")
             
@@ -349,13 +373,12 @@ def main():
             time.sleep(0.5)
     
     else:  # Worker processes
-        logger.info(f"Worker {rank} started")
-        
-        # Load model in each worker
         model = load_model(CONFIG["model_path"])
         if model is None:
             logger.error(f"Worker {rank}: Failed to load model, exiting")
             sys.exit(1)
+        
+        logger.info(f"Worker {rank} loaded model successfully")
         
         # Worker processing loop
         while True:
@@ -364,20 +387,23 @@ def main():
             
             # None means no work to do in this round
             if transaction is None:
+                logger.info(f"Worker {rank} received no work this round")
                 comm.send(None, dest=0)
                 continue
             
             # Extract the actual transaction content from the message
             transaction_content = transaction.get('content', transaction)
-            logger.info(f"Worker {rank} processing transaction {transaction_content.get('transaction_id', 'unknown')}")
+            transaction_id = transaction_content.get('transaction_id', transaction.get('id', 'unknown'))
+            logger.info(f"Worker {rank} processing transaction {transaction_id}")
             
             try:
                 # Process the transaction
                 result = predict_fraud(model, transaction_content)
+                logger.info(f"Worker {rank} completed prediction for {transaction_id}: fraud={result.get('is_fraud', 'unknown')}")
                 # Send result back to master
                 comm.send(result, dest=0)
             except Exception as e:
-                logger.error(f"Worker {rank} error: {str(e)}")
+                logger.error(f"Worker {rank} error processing {transaction_id}: {str(e)}")
                 comm.send(None, dest=0)  # Send None to indicate error
 
 if __name__ == "__main__":
