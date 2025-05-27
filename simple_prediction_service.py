@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""MPI-based ML Prediction Service
+"""
+Simple MPI-based ML Prediction Service
 
 This service reads transactions from queue files, processes them using MPI workers,
 and writes prediction results back to a results queue file.
@@ -11,21 +12,15 @@ import json
 import time
 import pickle
 import logging
-import uuid
 import numpy as np
 from datetime import datetime
-from dotenv import load_dotenv
 from mpi4py import MPI
-
-# Load environment variables
-load_dotenv()
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("prediction_service.log"),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -33,19 +28,27 @@ logger = logging.getLogger("prediction_service")
 
 # Configuration
 CONFIG = {
-    "queue_data_dir": os.getenv("QUEUE_DATA_DIR", "./a3/queue_service/queue_data"),
-    "transaction_queue_file": os.getenv("TRANSACTION_QUEUE_FILE", "TQ1.json"),
-    "transaction_queue_file2": os.getenv("TRANSACTION_QUEUE_FILE2", "TQ2.json"),
-    "results_queue_file": os.getenv("RESULTS_QUEUE_FILE", "PQ1.json"),
-    "model_path": os.getenv("MODEL_PATH", "./mpi/fraud_rf_model.pkl"),
-    "num_processors": int(os.getenv("NUM_PROCESSORS", "5"))
+    "queue_data_dir": "./a3/queue_service/queue_data",
+    "transaction_queue_file": "TQ1.json",
+    "transaction_queue_file2": "TQ2.json",
+    "results_queue_file": "PQ1.json",
+    "model_path": "./mpi/fraud_rf_model.pkl",
+    "num_processors": 3  # Default: 1 master + 2 workers
 }
 
-class FileQueueClient:
-    """Client for interacting with queue files directly."""
+# Override config from environment variables if present
+for key in CONFIG:
+    env_var = key.upper()
+    if env_var in os.environ:
+        CONFIG[key] = os.environ[env_var]
+        if key == "num_processors":
+            CONFIG[key] = int(os.environ[env_var])
+
+class SimpleQueueClient:
+    """Simple client for interacting with queue files."""
     
     def __init__(self, config):
-        """Initialize the file queue client with configuration."""
+        """Initialize the queue client with configuration."""
         self.queue_data_dir = config["queue_data_dir"]
         self.transaction_queue_file = os.path.join(self.queue_data_dir, config["transaction_queue_file"])
         self.transaction_queue_file2 = os.path.join(self.queue_data_dir, config["transaction_queue_file2"])
@@ -58,17 +61,12 @@ class FileQueueClient:
         self._initialize_queue_file(self.transaction_queue_file)
         self._initialize_queue_file(self.transaction_queue_file2)
         self._initialize_queue_file(self.results_queue_file)
-        
-        logger.info(f"FileQueueClient initialized with data directory: {self.queue_data_dir}")
-        logger.info(f"Transaction queue files: {self.transaction_queue_file}, {self.transaction_queue_file2}")
-        logger.info(f"Results queue file: {self.results_queue_file}")
     
     def _initialize_queue_file(self, file_path):
         """Initialize a queue file if it doesn't exist."""
         if not os.path.exists(file_path):
             with open(file_path, 'w') as f:
                 json.dump([], f)
-            logger.info(f"Created empty queue file: {file_path}")
     
     def _read_queue(self, queue_file):
         """Read messages from a queue file."""
@@ -94,33 +92,14 @@ class FileQueueClient:
             logger.error(f"Error writing to queue file {queue_file}: {str(e)}")
             return False
     
-    def queue_exists(self, queue_file):
-        """Check if a queue file exists."""
-        return os.path.exists(queue_file) and os.path.getsize(queue_file) > 0
-    
-    def push_message(self, queue_file, message):
-        """Push a message to the specified queue file."""
+    def get_queue_size(self, queue_file):
+        """Get the number of messages in a queue."""
         try:
-            # Read current messages
             messages = self._read_queue(queue_file)
-            
-            # Add new message with metadata
-            message_with_metadata = {
-                "id": str(uuid.uuid4()),
-                "content": message,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            messages.append(message_with_metadata)
-            
-            # Write back to file
-            success = self._write_queue(queue_file, messages)
-            if success:
-                logger.info(f"Message pushed to {os.path.basename(queue_file)} successfully")
-            return success
+            return len(messages)
         except Exception as e:
-            logger.error(f"Error pushing message to {queue_file}: {str(e)}")
-            return False
+            logger.error(f"Error getting queue size for {queue_file}: {str(e)}")
+            return 0
     
     def pull_messages(self, queue_file, count=1):
         """Pull multiple messages from the specified queue file."""
@@ -129,7 +108,6 @@ class FileQueueClient:
             messages = self._read_queue(queue_file)
             
             if not messages:
-                logger.info(f"Queue {os.path.basename(queue_file)} is empty")
                 return []
             
             # Take the requested number of messages (or all if fewer available)
@@ -140,98 +118,68 @@ class FileQueueClient:
             # Write remaining messages back to file
             self._write_queue(queue_file, remaining_messages)
             
-            # Extract just the content of each message
-            return [msg["content"] for msg in pulled_messages]
+            return pulled_messages
         except Exception as e:
             logger.error(f"Error pulling messages from {queue_file}: {str(e)}")
             return []
     
-    def get_queue_size(self, queue_file):
-        """Get the number of messages in a queue."""
+    def push_message(self, queue_file, message):
+        """Push a message to the specified queue file."""
         try:
+            # Read current messages
             messages = self._read_queue(queue_file)
-            return len(messages)
+            
+            # Add new message
+            messages.append(message)
+            
+            # Write back to file
+            success = self._write_queue(queue_file, messages)
+            if success:
+                logger.info(f"Message pushed to {os.path.basename(queue_file)} successfully")
+            return success
         except Exception as e:
-            logger.error(f"Error getting queue size for {queue_file}: {str(e)}")
-            return 0
+            logger.error(f"Error pushing message to {queue_file}: {str(e)}")
+            return False
 
 def load_model(model_path):
     """Load the pre-trained fraud detection model."""
     try:
         logger.info(f"Loading model from {model_path}")
-        # Use joblib instead of pickle for better compatibility with scikit-learn models
-        import joblib
-        model = joblib.load(model_path)
-        logger.info("Model loaded successfully using joblib")
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        logger.info("Model loaded successfully")
         return model
     except Exception as e:
-        logger.warning(f"Could not load model from {model_path} using joblib: {str(e)}")
-        logger.info("Trying with pickle as fallback...")
+        logger.warning(f"Could not load model from {model_path}: {str(e)}")
+        logger.info("Creating a mock model for testing")
         
-        try:
-            with open(model_path, 'rb') as f:
-                model = pickle.load(f)
-            logger.info("Model loaded successfully using pickle")
-            return model
-        except Exception as e1:
-            logger.warning(f"Could not load model using pickle: {str(e1)}")
-            logger.info("Attempting to create a new model...")
+        # Create a mock model class for testing
+        class MockModel:
+            def predict_proba(self, features):
+                # Always return a low probability of fraud (0.1) for testing
+                return np.array([[0.9, 0.1]] * len(features))
             
-            # Try to generate a new model using create_model.py
-            try:
-                import subprocess
-                import os
-                # Ensure the directory exists
-                os.makedirs(os.path.dirname(model_path), exist_ok=True)
-                subprocess.run(["python", "create_model.py"], check=True)
-                logger.info("Model creation completed, trying to load again with joblib")
-                
-                # Try loading again with joblib
-                import joblib
-                model = joblib.load(model_path)
-                logger.info("Model loaded successfully after creation")
-                return model
-            except Exception as e2:
-                logger.warning(f"Failed to create and load model: {str(e2)}")
-                logger.info("Falling back to mock model")
-                
-                # Create a mock model class for testing when the real model is not available
-                class MockModel:
-                    def predict_proba(self, features):
-                        # Always return a low probability of fraud (0.1) for testing
-                        return np.array([[0.9, 0.1]] * len(features))
-                    
-                    def predict(self, features):
-                        # Always predict not fraud (0) for testing
-                        return np.zeros(len(features))
-                
-                return MockModel()
+            def predict(self, features):
+                # Always predict not fraud (0) for testing
+                return np.zeros(len(features))
+        
+        return MockModel()
 
 def preprocess_transaction(transaction):
     """
     Preprocess transaction data for the model.
-    This function extracts and formats the features needed by the model.
+    Extract and format the features needed by the model.
     """
     try:
         # Extract features from transaction
-        # In a real system, this would involve more sophisticated feature engineering
-        # For this example, we'll use a simplified approach
-        
-        # Check if we have the necessary fields
-        if not isinstance(transaction, dict):
-            logger.error(f"Invalid transaction format: {type(transaction)}")
-            return None
-            
-        # Extract all required features for the model
         amount = float(transaction.get('amount', 0))
         transaction_count = float(transaction.get('transaction_count', 0))
-        customer_risk_score = float(transaction.get('customer_risk_score', 0.5))  # Default to medium risk
-        vendor_risk_score = float(transaction.get('vendor_risk_score', 0.5))  # Default to medium risk
+        customer_risk_score = float(transaction.get('customer_risk_score', 0.5))
+        vendor_risk_score = float(transaction.get('vendor_risk_score', 0.5))
         
-        # Create a feature vector with all 4 required features
+        # Create a feature vector with all required features
         features = np.array([amount, transaction_count, customer_risk_score, vendor_risk_score]).reshape(1, -1)
         
-        logger.info(f"Preprocessed features: {features}")
         return features
     except Exception as e:
         logger.error(f"Error preprocessing transaction: {str(e)}")
@@ -244,16 +192,9 @@ def predict_fraud(model, transaction):
         features = preprocess_transaction(transaction)
         if features is None:
             return None
-            
-        # Generate a transaction ID if not present
-        if 'transaction_id' not in transaction:
-            transaction['transaction_id'] = str(uuid.uuid4())
-            
-        # Log the transaction being processed
-        logger.info(f"Processing transaction {transaction.get('transaction_id', 'unknown')}")
         
         # Get prediction probabilities
-        probs = model.predict_proba(features.reshape(1, -1))[0]
+        probs = model.predict_proba(features)[0]
         
         # Add prediction to transaction
         result = transaction.copy()
@@ -275,27 +216,22 @@ def predict_fraud(model, transaction):
 def main():
     """Main entry point for the prediction service."""
     # Initialize MPI
-    from mpi4py import MPI
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()  # Processor rank (0 is master, others are workers)
     size = comm.Get_size()  # Total number of processors
     
-    mpi_available = True
     num_workers = size - 1 if size > 1 else 1  # Number of worker processes
     
     logger.info(f"MPI Rank: {rank}, Size: {size}, Workers: {num_workers}")
     
-    # Initialize file queue client
-    queue_client = FileQueueClient(CONFIG)
+    # Initialize queue client
+    queue_client = SimpleQueueClient(CONFIG)
     
     # Load the model
     model_path = CONFIG["model_path"]
     
     if rank == 0:  # Master process
         logger.info("Starting master process")
-        
-        # Master doesn't need to load the model, only workers do
-        logger.info("Master process initialized successfully")
         
         # Main processing loop
         while True:
@@ -319,7 +255,7 @@ def main():
             
             # Determine how many transactions to pull (up to the number of workers)
             batch_size = min(queue_size, num_workers)
-            logger.info(f"Pulling {batch_size} transactions from queue")
+            logger.info(f"Pulling {batch_size} transactions from {os.path.basename(queue_file)}")
             
             # Pull transactions from the queue
             transactions = queue_client.pull_messages(queue_file, batch_size)
@@ -329,7 +265,7 @@ def main():
                 time.sleep(2)  # Wait before checking again
                 continue
             
-            logger.info(f"Retrieved {len(transactions)} transactions for {num_workers} workers")
+            logger.info(f"Retrieved {len(transactions)} transactions for processing")
             
             # Distribute transactions to workers
             results = []
@@ -338,7 +274,7 @@ def main():
             for i, transaction in enumerate(transactions):
                 worker_rank = (i % num_workers) + 1  # Workers start at rank 1
                 if worker_rank < size:  # Make sure we don't send to non-existent workers
-                    logger.info(f"Sending transaction {transaction.get('id', 'unknown')} to worker {worker_rank}")
+                    logger.info(f"Sending transaction to worker {worker_rank}")
                     comm.send(transaction, dest=worker_rank)
             
             # Send None to any workers that didn't get a transaction
@@ -353,7 +289,7 @@ def main():
                 if worker_rank < size:  # Make sure we don't receive from non-existent workers
                     result = comm.recv(source=worker_rank)
                     if result is not None:
-                        logger.info(f"Received result from worker {worker_rank} for transaction {result.get('transaction_id', 'unknown')}")
+                        logger.info(f"Received valid result from worker {worker_rank}")
                         results.append(result)
                     else:
                         logger.warning(f"Worker {worker_rank} returned None result")
@@ -362,12 +298,12 @@ def main():
             if results:
                 logger.info(f"Pushing {len(results)} results to the results queue")
                 for result in results:
-                    queue_client.push_message(queue_client.results_queue_file, result)
+                    success = queue_client.push_message(queue_client.results_queue_file, result)
+                    if not success:
+                        logger.error(f"Failed to push result to queue")
                 logger.info(f"Successfully pushed {len(results)} results to queue")
             else:
                 logger.warning("No valid results received from workers")
-            
-            logger.info(f"Completed processing batch of {len(transactions)} transactions")
             
             # Small delay to prevent CPU overuse
             time.sleep(0.5)
@@ -391,20 +327,21 @@ def main():
                 comm.send(None, dest=0)
                 continue
             
-            # Extract the actual transaction content from the message
-            transaction_content = transaction.get('content', transaction)
-            transaction_id = transaction_content.get('transaction_id', transaction.get('id', 'unknown'))
-            logger.info(f"Worker {rank} processing transaction {transaction_id}")
-            
+            # Process the transaction
             try:
-                # Process the transaction
-                result = predict_fraud(model, transaction_content)
-                logger.info(f"Worker {rank} completed prediction for {transaction_id}: fraud={result.get('is_fraud', 'unknown')}")
+                logger.info(f"Worker {rank} processing transaction: {transaction.get('transaction_id')}")
+                result = predict_fraud(model, transaction)
+                if result is None:
+                    logger.error(f"Worker {rank} failed to process transaction")
+                    comm.send(None, dest=0)
+                    continue
+                
+                logger.info(f"Worker {rank} completed prediction")
                 # Send result back to master
                 comm.send(result, dest=0)
             except Exception as e:
-                logger.error(f"Worker {rank} error processing {transaction_id}: {str(e)}")
+                logger.error(f"Worker {rank} error processing transaction: {str(e)}")
                 comm.send(None, dest=0)  # Send None to indicate error
 
 if __name__ == "__main__":
-    main()
+    main() 

@@ -1,0 +1,50 @@
+[
+  {
+    "transaction_id": "tx_a450c453",
+    "amount": 5238.35,
+    "transaction_count": 29,
+    "customer_risk_score": 0.26,
+    "vendor_risk_score": 0.83,
+    "prediction": {
+      "fraud_probability": 0.1,
+      "is_fraudulent": false,
+      "timestamp": "2025-05-27T15:58:16.855686"
+    }
+  },
+  {
+    "transaction_id": "tx_1a0e2a80",
+    "amount": 4042.04,
+    "transaction_count": 19,
+    "customer_risk_score": 0.78,
+    "vendor_risk_score": 0.5,
+    "prediction": {
+      "fraud_probability": 0.1,
+      "is_fraudulent": false,
+      "timestamp": "2025-05-27T15:58:37.035752"
+    }
+  },
+  {
+    "transaction_id": "tx_4fd57418",
+    "amount": 7024.78,
+    "transaction_count": 12,
+    "customer_risk_score": 0.6,
+    "vendor_risk_score": 0.78,
+    "prediction": {
+      "fraud_probability": 0.1,
+      "is_fraudulent": false,
+      "timestamp": "2025-05-27T15:54:17.320220"
+    }
+  },
+  {
+    "transaction_id": "tx_23431b79",
+    "amount": 361.3,
+    "transaction_count": 38,
+    "customer_risk_score": 0.18,
+    "vendor_risk_score": 0.49,
+    "prediction": {
+      "fraud_probability": 0.1,
+      "is_fraudulent": false,
+      "timestamp": "2025-05-27T15:59:05.491992"
+    }
+  }
+]

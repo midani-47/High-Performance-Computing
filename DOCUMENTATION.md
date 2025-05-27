@@ -1,8 +1,8 @@
 # Technical Documentation: MPI-Based Fraud Detection Service
 
 ## Authors
-- Abed Midani
 - Nevin Joseph
+- Abed Midani
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -12,21 +12,20 @@
 5. [Prediction Model](#prediction-model)
 6. [Data Flow](#data-flow)
 7. [Error Handling](#error-handling)
-8. [Containerization](#containerization)
-9. [Performance Considerations](#performance-considerations)
-10. [Limitations and Future Improvements](#limitations-and-future-improvements)
+8. [Performance Considerations](#performance-considerations)
+9. [Limitations and Future Improvements](#limitations-and-future-improvements)
 
 ## Introduction
 
-This document provides technical details about an MPI-based machine learning prediction service designed to process transaction data for fraud detection. The service utilizes the Message Passing Interface (MPI) to distribute prediction tasks across multiple processors or nodes, enabling high-performance parallel processing.
+This document provides technical details about an MPI-based machine learning prediction service designed to process transaction data for fraud detection. The service utilizes the Message Passing Interface (MPI) to distribute prediction tasks across multiple processors, enabling high-performance parallel processing.
 
-The prediction service was developed as part of Assignment 4, building upon the message queue service from Assignment 3. It serves as a computation-intensive component in a distributed system architecture, demonstrating how MPI can be used to scale machine learning workloads.
+The prediction service was developed as part of Assignment 4, building upon the queue files from Assignment 3. It serves as a computation-intensive component in a distributed system architecture, demonstrating how MPI can be used to scale machine learning workloads.
 
 ## System Architecture
 
 The prediction service follows a master-worker architecture pattern:
 
-1. **Master Process**: Coordinates the distribution of work, communicates with the queue service, and collects results from workers.
+1. **Master Process**: Coordinates the distribution of work, reads from queue files, and collects results from workers.
 2. **Worker Processes**: Receive transaction data, make predictions using the pre-trained model, and return results to the master.
 
 ### Technology Stack
@@ -35,11 +34,8 @@ The system is built using the following technologies:
 
 - **MPI4Py**: Python bindings for the Message Passing Interface (MPI) standard, enabling parallel computation across multiple processors.
 - **OpenMPI**: An open-source implementation of the MPI standard used as the underlying MPI framework.
-- **Docker**: The application is containerized using Docker, making it easy to deploy. Docker Compose is used to orchestrate multiple containers for a distributed deployment.
 - **Scikit-learn**: Used for loading and utilizing the pre-trained Random Forest model for fraud detection.
 - **Pandas/NumPy**: Used for data manipulation and preprocessing of transaction data.
-- **Requests**: For communication with the queue service API.
-- **Python-dotenv**: For configuration management through environment variables.
 
 ## MPI Implementation
 
@@ -48,12 +44,10 @@ The system is built using the following technologies:
 The MPI implementation follows a master-worker pattern:
 
 - **Rank 0 Process (Master)**: Responsible for:
-  - Authenticating with the queue service
-  - Loading the ML model
-  - Pulling transactions from the transaction queue
+  - Reading from the transaction queue files
   - Distributing work to worker processes
   - Collecting prediction results
-  - Pushing results to the prediction queue
+  - Writing results to the prediction queue file
 
 - **Rank 1+ Processes (Workers)**: Responsible for:
   - Loading the ML model locally
@@ -84,10 +78,10 @@ size = comm.Get_size()
 
 # Master process logic
 if rank == 0:
-    # Pull transactions from queue
+    # Pull transactions from queue files
     # Distribute to workers
     # Collect results
-    # Push results to queue
+    # Push results to results queue file
 else:
     # Worker process logic
     # Receive transaction
@@ -97,24 +91,22 @@ else:
 
 ## Queue Integration
 
-The prediction service integrates with the message queue service from Assignment 3 through a RESTful API client. The `QueueClient` class handles:
+The prediction service integrates with the queue files from Assignment 3:
 
-- **Authentication**: Using JWT tokens for secure access
-- **Message Pulling**: Retrieving transaction messages from the transaction queue
-- **Message Pushing**: Sending prediction results to the prediction queue
-- **Error Handling**: Managing HTTP errors, token expiration, and retries
+- **File-Based Queues**: The system uses JSON files in the `a3/queue_service/queue_data` directory to store transactions and prediction results.
+- **Transaction Queues**: TQ1.json and TQ2.json store incoming transactions.
+- **Results Queue**: PQ1.json stores prediction results.
 
-The integration follows these principles:
-
-1. **Decoupling**: The queue service and prediction service are completely decoupled, communicating only through the queue interface
-2. **Asynchronous Processing**: Transactions can be added to the queue at any time and will be processed as resources become available
-3. **Persistence**: The queue service handles persistence, ensuring no transactions are lost
+The `SimpleQueueClient` class handles:
+- Reading transactions from queue files
+- Writing prediction results to the results file
+- Managing queue file access and modifications
 
 ## Prediction Model
 
 The service uses a pre-trained Random Forest model for fraud detection:
 
-- **Model Loading**: The model is loaded from a pickle file (`fraud_rf_model.pkl`)
+- **Model Loading**: The model is loaded from a pickle file (`mpi/fraud_rf_model.pkl`)
 - **Input Processing**: Transaction data is preprocessed to extract relevant features
 - **Prediction**: The model outputs a binary classification (fraud/not fraud) and a confidence score
 - **Result Formatting**: Predictions are formatted with transaction ID, prediction result, confidence score, and metadata
@@ -126,43 +118,26 @@ The complete data flow through the system is as follows:
 1. **Initialization**:
    - Master and worker processes initialize
    - Each process loads the ML model
-   - Master authenticates with the queue service
 
 2. **Transaction Processing**:
-   - Master pulls up to N transactions from the queue (N = number of workers)
+   - Master reads up to N transactions from the queue files (N = number of workers)
    - Master distributes transactions to workers
    - Workers preprocess transactions and make predictions
    - Workers send prediction results back to master
-   - Master pushes results to the prediction queue
+   - Master writes results to the prediction results file
 
 3. **Cycle Continuation**:
    - Master proceeds to the next batch of transactions
-   - If the queue is empty, master waits and retries
+   - If the queues are empty, master waits and retries
 
 ## Error Handling
 
 The service implements robust error handling:
 
-- **Model Loading Errors**: If the model fails to load, the process logs the error and exits
-- **Queue Communication Errors**: If communication with the queue fails, the service logs the error and retries
-- **Authentication Errors**: If authentication fails, the service logs the error and retries or exits if persistent
+- **Model Loading Errors**: If the model fails to load, a mock model is used as fallback
+- **Queue File Errors**: If reading/writing to queue files fails, the service logs the error and retries
 - **Prediction Errors**: If prediction fails for a transaction, the error is logged and the transaction is skipped
-- **MPI Communication Errors**: If MPI communication fails, the service logs the error and attempts to recover or gracefully exit
-
-## Containerization
-
-The service is containerized using Docker to ensure consistent deployment across environments:
-
-- **Base Image**: Ubuntu 22.04 with Python 3 and OpenMPI
-- **SSH Configuration**: Set up for communication between MPI nodes
-- **Volume Mounting**: The model file is mounted to avoid rebuilding the image when the model changes
-- **Network Configuration**: A custom bridge network enables communication between containers
-
-Docker Compose is used to orchestrate multiple containers:
-
-- **Master Node**: Coordinates the MPI processes and communicates with the queue service
-- **Worker Nodes**: Process transactions in parallel
-- **Network**: All nodes are connected through a dedicated Docker network
+- **MPI Communication Errors**: If MPI communication fails, the service logs the error and attempts to recover
 
 ## Performance Considerations
 
@@ -172,7 +147,7 @@ Several design decisions were made to optimize performance:
 - **Batched Processing**: Processing transactions in batches reduces communication overhead
 - **Local Model Loading**: Each process loads the model locally to avoid model serialization/deserialization overhead
 - **Efficient Communication**: Only transaction data and prediction results are communicated between processes
-- **Asynchronous Queue Integration**: The service doesn't block on queue operations, allowing for continuous processing
+- **Queue Prioritization**: The service checks both transaction queues and processes from the one with more messages first
 
 ## Limitations and Future Improvements
 
@@ -183,4 +158,3 @@ Current limitations and potential improvements include:
 - **Fault Tolerance**: If a worker fails, its assigned transactions won't be processed. A checkpoint/restart mechanism could be added.
 - **Model Updating**: The model is loaded once at startup. A mechanism for hot-swapping models could be implemented.
 - **Performance Monitoring**: Adding detailed performance metrics and monitoring would help identify bottlenecks.
-- **Security Enhancements**: While basic authentication is implemented, additional security measures like TLS for API communication would improve security.

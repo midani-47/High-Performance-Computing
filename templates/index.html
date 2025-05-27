@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,9 +32,6 @@
         .status-not-running {
             background-color: #dc3545;
         }
-        .status-unknown {
-            background-color: #ffc107;
-        }
     </style>
 </head>
 <body>
@@ -50,33 +46,33 @@
                     </div>
                     <div class="card-body">
                         <p>
-                            <strong>Transaction Queue 1 (TQ1):</strong> 
+                            <strong>Transaction Queue 1 ({{ transaction_queue }}):</strong> 
                             <span class="status-indicator 
                                 {% if transaction_queue_exists %}status-running
                                 {% else %}status-not-running{% endif %}"></span>
                             {{ "Exists" if transaction_queue_exists else "Does Not Exist" }}
                             {% if transaction_queue_exists %}
-                            ({{ transaction_queue_size }} messages)
+                            ({{ transaction_queue_size }} transactions)
                             {% endif %}
                         </p>
                         <p>
-                            <strong>Transaction Queue 2 (TQ2):</strong> 
+                            <strong>Transaction Queue 2 ({{ transaction_queue2 }}):</strong> 
                             <span class="status-indicator 
                                 {% if transaction_queue2_exists %}status-running
                                 {% else %}status-not-running{% endif %}"></span>
                             {{ "Exists" if transaction_queue2_exists else "Does Not Exist" }}
                             {% if transaction_queue2_exists %}
-                            ({{ transaction_queue2_size }} messages)
+                            ({{ transaction_queue2_size }} transactions)
                             {% endif %}
                         </p>
                         <p>
-                            <strong>Results Queue (PQ1):</strong> 
+                            <strong>Results Queue ({{ results_queue }}):</strong> 
                             <span class="status-indicator 
                                 {% if results_queue_exists %}status-running
                                 {% else %}status-not-running{% endif %}"></span>
                             {{ "Exists" if results_queue_exists else "Does Not Exist" }}
                             {% if results_queue_exists %}
-                            ({{ results_queue_size }} messages)
+                            ({{ results_queue_size }} results)
                             {% endif %}
                         </p>
                         
@@ -101,13 +97,13 @@
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="target_queue" id="tq1" value="TQ1" checked>
                                     <label class="form-check-label" for="tq1">
-                                        Transaction Queue 1 (TQ1)
+                                        Transaction Queue 1 ({{ transaction_queue }})
                                     </label>
                                 </div>
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="target_queue" id="tq2" value="TQ2">
                                     <label class="form-check-label" for="tq2">
-                                        Transaction Queue 2 (TQ2)
+                                        Transaction Queue 2 ({{ transaction_queue2 }})
                                     </label>
                                 </div>
                             </div>
@@ -146,21 +142,11 @@
                     </div>
                     <div class="card-body">
                         <ol>
-                            <li>The system is configured to work with the following queue files:
-                                <ul>
-                                    <li><strong>Transaction Queue 1:</strong> {{ transaction_queue }}</li>
-                                    <li><strong>Transaction Queue 2:</strong> {{ transaction_queue2 }}</li>
-                                    <li><strong>Results Queue:</strong> {{ results_queue }}</li>
-                                </ul>
+                            <li>Push sample transactions to either TQ1 or TQ2 using the form above</li>
+                            <li>Make sure the MPI prediction service is running:
+                                <pre class="json-display">mpirun -n 3 python simple_prediction_service.py</pre>
+                                <small>The number 3 represents the total number of processes (1 master + 2 workers)</small>
                             </li>
-                            <li>Push sample transactions to either TQ1 or TQ2</li>
-                            <li>Start the MPI prediction service using one of these methods:
-                                <ul>
-                                    <li><code>mpirun -n [NUM_PROCESSORS] python prediction_service.py</code> (local mode)</li>
-                                    <li><code>docker-compose up</code> (Docker mode)</li>
-                                </ul>
-                            </li>
-                            <li>The prediction service will process transactions from the queue with the most messages</li>
                             <li>Click "Refresh Results" to see prediction results as they are processed</li>
                         </ol>
                     </div>
@@ -182,7 +168,9 @@
                     submitBtn.disabled = true;
                     submitBtn.innerHTML = 'Pushing...';
                     
-                    const formData = new FormData(pushTransactionsForm);
+                    const formData = new FormData();
+                    formData.append('num_transactions', document.getElementById('numTransactions').value);
+                    formData.append('target_queue', document.querySelector('input[name="target_queue"]:checked').value);
                     
                     fetch('/push_transactions', {
                         method: 'POST',
@@ -192,7 +180,7 @@
                     .then(data => {
                         if (data.success) {
                             alert(data.message);
-                            refreshQueueStatus();
+                            location.reload();
                         } else {
                             alert('Error: ' + data.message);
                         }
@@ -236,8 +224,6 @@
                                 
                                 resultsContainer.innerHTML = html;
                             }
-                            
-                            refreshQueueStatus();
                         } else {
                             alert('Error: ' + data.message);
                         }
@@ -249,19 +235,6 @@
                         refreshResultsBtn.disabled = false;
                         refreshResultsBtn.innerHTML = 'Refresh Results';
                     });
-                });
-            }
-            
-            function refreshQueueStatus() {
-                fetch('/queue_status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        location.reload();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error refreshing queue status:', error);
                 });
             }
         });
