@@ -27,15 +27,26 @@ Write-Host "Creating empty queue files..." -ForegroundColor Yellow
     Write-Host "Created empty queue file: $filePath" -ForegroundColor Green
 }
 
-# Step 4: Create a test transaction
+# Step 4: Create a test transaction in Assignment 3 format
 Write-Host "Creating test transaction..." -ForegroundColor Yellow
-$testTransaction = @{
+$transactionContent = @{
     transaction_id = "test-tx-001"
+    customer_id = "cust_test123"
+    customer_name = "Test Customer"
     amount = 5000.00
+    vendor_id = "vendor_test456"
+    date = (Get-Date).ToString("o")
     transaction_count = 25
     customer_risk_score = 0.7
     vendor_risk_score = 0.6
-} | ConvertTo-Json -Compress
+}
+
+$testTransaction = @{
+    content = $transactionContent
+    timestamp = (Get-Date).ToString("o")
+    message_type = "transaction"
+    id = "msg_test001"
+} | ConvertTo-Json -Depth 3 -Compress
 
 # Step 5: Add the transaction to the queue
 Write-Host "Adding transaction to queue file..." -ForegroundColor Yellow
@@ -47,6 +58,6 @@ Write-Host "python web_ui.py" -ForegroundColor White -BackgroundColor DarkBlue
 
 # Step 7: Provide instructions for running the MPI service
 Write-Host "`nTo run the MPI service, execute:" -ForegroundColor Cyan
-Write-Host "mpiexec -n 3 python simple_prediction_service.py" -ForegroundColor White -BackgroundColor DarkBlue
+Write-Host "mpiexec -n 5 python simple_prediction_service.py" -ForegroundColor White -BackgroundColor DarkBlue
 
 Write-Host "`nAfter running both commands, visit http://localhost:7600 in your browser" -ForegroundColor Green 

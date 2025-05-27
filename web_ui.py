@@ -37,7 +37,7 @@ CONFIG = {
     "transaction_queue_file2": os.getenv("TRANSACTION_QUEUE_FILE2", "TQ2.json"),
     "results_queue_file": os.getenv("RESULTS_QUEUE_FILE", "PQ1.json"),
     "model_path": os.getenv("MODEL_PATH", "./mpi/fraud_rf_model.pkl"),
-    "num_processors": int(os.getenv("NUM_PROCESSORS", "3"))
+    "num_processors": int(os.getenv("NUM_PROCESSORS", "5"))
 }
 
 # Log configuration for debugging
@@ -134,22 +134,62 @@ class SimpleQueueClient:
     def get_all_messages(self, queue_file):
         """Get all messages from a queue file without removing them."""
         return self._read_queue(queue_file)
+    
+    def clear_queue(self, queue_file):
+        """Clear all messages from a queue file."""
+        try:
+            with open(queue_file, 'w') as f:
+                json.dump([], f)
+            logger.info(f"Cleared queue file: {queue_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing queue file {queue_file}: {str(e)}")
+            return False
 
 def generate_sample_transaction():
-    """Generate a sample transaction for testing."""
-    transaction_id = f"tx_{uuid.uuid4().hex[:8]}"
-    amount = random.uniform(100, 10000)
-    transaction_count = random.randint(1, 50)
-    customer_risk_score = random.uniform(0, 1)
-    vendor_risk_score = random.uniform(0, 1)
+    """Generate a sample transaction for testing.
     
-    # Create a transaction with the required fields for the fraud detection model
-    return {
+    Creates a transaction in the Assignment 3 message format:
+    {
+      "content": {
+        "transaction_id": str,
+        "customer_id": str,
+        "customer_name": str,
+        "amount": float,
+        "vendor_id": str,
+        "date": str,
+        ... other transaction fields
+      },
+      "timestamp": datetime,
+      "message_type": "transaction",
+      "id": str
+    }
+    """
+    transaction_id = f"tx_{uuid.uuid4().hex[:8]}"
+    message_id = f"msg_{uuid.uuid4().hex[:8]}"
+    
+    # Generate a random amount with some variance
+    amount = round(random.uniform(100, 10000), 2)
+    
+    # Create transaction content
+    transaction_content = {
         "transaction_id": transaction_id,
-        "amount": round(amount, 2),
-        "transaction_count": transaction_count,
-        "customer_risk_score": round(customer_risk_score, 2),
-        "vendor_risk_score": round(vendor_risk_score, 2)
+        "customer_id": f"cust_{uuid.uuid4().hex[:6]}",
+        "customer_name": f"Customer {random.randint(1, 100)}",
+        "amount": amount,
+        "vendor_id": f"vendor_{uuid.uuid4().hex[:6]}",
+        "date": datetime.now().isoformat(),
+        "transaction_count": random.randint(1, 50),
+        "customer_risk_score": round(random.uniform(0, 1), 2),
+        "vendor_risk_score": round(random.uniform(0, 1), 2)
+    }
+    
+    # Create the full message in Assignment 3 format
+    return {
+        "content": transaction_content,
+        "timestamp": datetime.now().isoformat(),
+        "message_type": "transaction",
+        "id": message_id
     }
 
 # Initialize the queue client
@@ -168,6 +208,17 @@ def index():
     transaction_queue2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
     results_queue_size = queue_client.get_queue_size(queue_client.results_queue_file)
     
+    # Get some sample transactions and results for preview
+    sample_transactions = []
+    if transaction_queue_exists and transaction_queue_size > 0:
+        all_transactions = queue_client.get_all_messages(queue_client.transaction_queue_file)
+        sample_transactions = all_transactions[:5]  # Show up to 5 transactions
+    
+    sample_results = []
+    if results_queue_exists and results_queue_size > 0:
+        all_results = queue_client.get_all_messages(queue_client.results_queue_file)
+        sample_results = all_results[:5]  # Show up to 5 results
+    
     return render_template('index.html', 
                           transaction_queue_exists=transaction_queue_exists,
                           transaction_queue_size=transaction_queue_size,
@@ -177,7 +228,10 @@ def index():
                           results_queue_size=results_queue_size,
                           transaction_queue=CONFIG["transaction_queue_file"],
                           transaction_queue2=CONFIG["transaction_queue_file2"],
-                          results_queue=CONFIG["results_queue_file"])
+                          results_queue=CONFIG["results_queue_file"],
+                          sample_transactions=sample_transactions,
+                          sample_results=sample_results,
+                          num_processors=CONFIG["num_processors"])
 
 @app.route('/push_transactions', methods=['POST'])
 def push_transactions():
@@ -240,14 +294,55 @@ def queue_status():
         transaction_queue2_size = queue_client.get_queue_size(queue_client.transaction_queue_file2)
         results_queue_size = queue_client.get_queue_size(queue_client.results_queue_file)
         
+        # Get some sample transactions and results for preview
+        sample_transactions = []
+        if transaction_queue_size > 0:
+            all_transactions = queue_client.get_all_messages(queue_client.transaction_queue_file)
+            sample_transactions = all_transactions[:5]  # Show up to 5 transactions
+        
+        sample_results = []
+        if results_queue_size > 0:
+            all_results = queue_client.get_all_messages(queue_client.results_queue_file)
+            sample_results = all_results[:5]  # Show up to 5 results
+        
         return jsonify({
             "success": True,
             "transaction_queue_size": transaction_queue_size,
             "transaction_queue2_size": transaction_queue2_size,
-            "results_queue_size": results_queue_size
+            "results_queue_size": results_queue_size,
+            "sample_transactions": sample_transactions,
+            "sample_results": sample_results
         })
     except Exception as e:
         logger.error(f"Error in queue_status: {str(e)}")
+        return jsonify({"success": False, "message": f"Error: {str(e)}"})
+
+@app.route('/clear_queue', methods=['POST'])
+def clear_queue():
+    """Clear a specific queue."""
+    try:
+        queue_name = request.form.get('queue_name', '')
+        
+        if queue_name == 'TQ1':
+            queue_file = queue_client.transaction_queue_file
+        elif queue_name == 'TQ2':
+            queue_file = queue_client.transaction_queue_file2
+        elif queue_name == 'PQ1':
+            queue_file = queue_client.results_queue_file
+        else:
+            return jsonify({"success": False, "message": "Invalid queue selection"})
+        
+        success = queue_client.clear_queue(queue_file)
+        
+        if success:
+            return jsonify({
+                "success": True, 
+                "message": f"Successfully cleared queue {queue_name}"
+            })
+        else:
+            return jsonify({"success": False, "message": f"Failed to clear queue {queue_name}"})
+    except Exception as e:
+        logger.error(f"Error in clear_queue: {str(e)}")
         return jsonify({"success": False, "message": f"Error: {str(e)}"})
 
 @app.route('/force_refresh')

@@ -7,7 +7,7 @@ A high-performance distributed machine learning prediction service for fraud det
 This service implements a distributed approach to ML prediction using OpenMPI to scale processing across multiple processors. The service:
 
 1. Reads the pre-trained Random Forest model for fraud detection (`fraud_rf_model.pkl`)
-2. Reads transaction data from queue files (TQ1.json and TQ2.json)
+2. Reads transaction data from queue files (TQ1.json and TQ2.json) that were implemented in Assignment 3
 3. Distributes these transactions to worker processes for parallel processing
 4. Gathers prediction results from workers
 5. Writes prediction results to a results file (PQ1.json)
@@ -17,6 +17,7 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 - **Parallel Processing**: Utilizes MPI to distribute workload across multiple processors
 - **Scalable Architecture**: Supports configurable number of worker processes
 - **File-Based Queues**: Works with local JSON files for transaction data and prediction results
+- **Integration with Assignment 3**: Compatible with the queue service from Assignment 3
 - **Web UI**: Provides a simple web interface for monitoring and testing
 - **Fault Tolerance**: Handles errors gracefully and continues processing available transactions
 - **Configurable**: Number of processors and other parameters are configurable through environment variables
@@ -38,6 +39,9 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 ├── test_mpi_service.sh           # Bash test script
 ├── a3/
 │   └── queue_service/
+│       ├── app/                  # Assignment 3 queue service implementation
+│       │   ├── models.py         # Data models for transactions and predictions
+│       │   └── ...
 │       └── queue_data/           # Directory containing queue JSON files
 │           ├── TQ1.json          # Transaction Queue 1
 │           ├── TQ2.json          # Transaction Queue 2
@@ -93,14 +97,14 @@ In a separate terminal, run:
 
 ```bash
 # On Linux/macOS:
-mpirun -n 3 python simple_prediction_service.py
+mpirun -n 5 python simple_prediction_service.py
 
 # On Windows:
-mpiexec -n 3 python simple_prediction_service.py
+mpiexec -n 5 python simple_prediction_service.py
 ```
 
 This will:
-1. Start 3 MPI processes (1 master + 2 workers)
+1. Start 5 MPI processes (1 master + 4 workers)
 2. Process transactions from the queue files
 3. Write results to the results file
 
@@ -120,7 +124,7 @@ The web UI allows you to:
 
 The service can be configured through environment variables:
 
-- `NUM_PROCESSORS`: Number of processors including master (default: 3)
+- `NUM_PROCESSORS`: Number of processors including master (default: 5)
 - `QUEUE_DATA_DIR`: Directory containing queue JSON files (default: ./a3/queue_service/queue_data)
 - `TRANSACTION_QUEUE_FILE`: Name of the first transaction queue file (default: TQ1.json)
 - `TRANSACTION_QUEUE_FILE2`: Name of the second transaction queue file (default: TQ2.json)
@@ -129,8 +133,9 @@ The service can be configured through environment variables:
 
 ## Transaction Format
 
-The prediction service expects transactions in this format:
+The prediction service supports both simple transaction format and Assignment 3 message format:
 
+### Simple Transaction Format
 ```json
 {
   "transaction_id": "tx123",
@@ -138,6 +143,26 @@ The prediction service expects transactions in this format:
   "transaction_count": 5,
   "customer_risk_score": 0.3,
   "vendor_risk_score": 0.2
+}
+```
+
+### Assignment 3 Message Format
+```json
+{
+  "content": {
+    "transaction_id": "tx123",
+    "customer_id": "cust456",
+    "customer_name": "John Doe",
+    "amount": 1000.00,
+    "vendor_id": "vend789",
+    "date": "2023-05-01T12:34:56",
+    "transaction_count": 5,
+    "customer_risk_score": 0.3,
+    "vendor_risk_score": 0.2
+  },
+  "timestamp": "2023-05-01T12:34:56",
+  "message_type": "transaction",
+  "id": "msg123"
 }
 ```
 
