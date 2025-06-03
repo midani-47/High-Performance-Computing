@@ -53,17 +53,10 @@ This service implements a distributed approach to ML prediction using OpenMPI to
 ### Step 1: Install Dependencies
 
 ```bash
-# Install OpenMPI
-# On Ubuntu:
-sudo apt-get install openmpi-bin libopenmpi-dev
+# After having installed openMPI:
 
-# On macOS:
-brew install open-mpi
-
-# On Windows:
-# Install Microsoft MPI: https://www.microsoft.com/en-us/download/details.aspx?id=57467
-
-# Install Python dependencies
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
