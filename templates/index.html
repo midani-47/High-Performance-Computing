@@ -1,0 +1,316 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fraud Detection UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-top: 20px; }
+        .card { margin-bottom: 20px; }
+        .transaction-card { border-left: 5px solid #007bff; }
+        .prediction-card { border-left: 5px solid #28a745; }
+        .prediction-fraud { border-left: 5px solid #dc3545; }
+        .refresh-btn { margin-left: 10px; }
+        .timestamp { font-size: 0.8rem; color: #6c757d; }
+        .badge-fraud { background-color: #dc3545; }
+        .badge-legitimate { background-color: #28a745; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Fraud Detection System</h1>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Submit Transaction</h5>
+                        <button id="generateRandom" class="btn btn-sm btn-secondary">Generate Random</button>
+                    </div>
+                    <div class="card-body">
+                        <form id="transactionForm">
+                            <div class="mb-3">
+                                <label for="customerId" class="form-label">Customer ID</label>
+                                <input type="text" class="form-control" id="customerId" placeholder="e.g., cust-123">
+                            </div>
+                            <div class="mb-3">
+                                <label for="amount" class="form-label">Amount</label>
+                                <input type="number" class="form-control" id="amount" min="10" max="1000" step="0.01" placeholder="Amount in $">
+                            </div>
+                            <div class="mb-3">
+                                <label for="status" class="form-label">Status</label>
+                                <select class="form-control" id="status">
+                                    {% for status in statuses %}
+                                    <option value="{{ status }}">{{ status }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="vendorId" class="form-label">Vendor ID</label>
+                                <select class="form-control" id="vendorId">
+                                    {% for vendor_id in vendor_ids %}
+                                    <option value="{{ vendor_id }}">{{ vendor_id }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Submit Transaction</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Controls</h5>
+                        <button id="clearData" class="btn btn-sm btn-danger">Clear All Data</button>
+                    </div>
+                    <div class="card-body">
+                        <p>Use this panel to control the fraud detection system.</p>
+                        <div class="d-flex">
+                            <button id="checkPredictions" class="btn btn-success">Check for Predictions</button>
+                            <div class="form-check ms-3 mt-2">
+                                <input class="form-check-input" type="checkbox" id="autoRefresh">
+                                <label class="form-check-label" for="autoRefresh">
+                                    Auto-refresh (5s)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <p><strong>Stats:</strong></p>
+                            <p>Transactions: <span id="txCount">{{ transactions|length }}</span></p>
+                            <p>Predictions: <span id="predCount">{{ predictions|length }}</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <h4 class="d-flex justify-content-between align-items-center mb-3">
+                    <span>Transactions</span>
+                    <span class="badge bg-primary rounded-pill" id="transactionBadge">{{ transactions|length }}</span>
+                </h4>
+                <div id="transactionsList">
+                    {% for tx in transactions %}
+                    <div class="card transaction-card">
+                        <div class="card-body">
+                            <h5 class="card-title">Transaction: {{ tx.transaction_id }}</h5>
+                            <h6 class="card-subtitle mb-2 text-muted">Customer: {{ tx.customer_id }}</h6>
+                            <p class="card-text">
+                                Amount: ${{ tx.amount }}<br>
+                                Status: {{ tx.status }}<br>
+                                Vendor ID: {{ tx.vendor_id }}
+                            </p>
+                            <div class="timestamp">{{ tx.timestamp }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">No transactions yet</div>
+                    {% endfor %}
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <h4 class="d-flex justify-content-between align-items-center mb-3">
+                    <span>Prediction Results</span>
+                    <span class="badge bg-success rounded-pill" id="predictionBadge">{{ predictions|length }}</span>
+                </h4>
+                <div id="predictionsList">
+                    {% for pred in predictions %}
+                    <div class="card {% if pred.prediction %}prediction-fraud{% else %}prediction-card{% endif %}">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between">
+                                <h5 class="card-title">Result: {{ pred.transaction_id }}</h5>
+                                <span class="badge {% if pred.prediction %}badge-fraud{% else %}badge-legitimate{% endif %}">
+                                    {% if pred.prediction %}FRAUD{% else %}LEGITIMATE{% endif %}
+                                </span>
+                            </div>
+                            <p class="card-text">
+                                Confidence: {{ pred.confidence|round(4) }}<br>
+                                Model Version: {{ pred.model_version }}<br>
+                                Processor: {{ pred.processor_rank }}
+                            </p>
+                            <div class="timestamp">{{ pred.timestamp }}</div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">No predictions yet</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Form submission
+        document.getElementById('transactionForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const customerId = document.getElementById('customerId').value || `cust-${Math.floor(Math.random() * 1000)}`;
+            const amount = document.getElementById('amount').value || (Math.random() * 990 + 10).toFixed(2);
+            const status = document.getElementById('status').value;
+            const vendorId = document.getElementById('vendorId').value;
+            
+            fetch('/submit_transaction', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `customer_id=${encodeURIComponent(customerId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(status)}&vendor_id=${encodeURIComponent(vendorId)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    addTransactionToUI(data.transaction);
+                    document.getElementById('transactionForm').reset();
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while submitting the transaction');
+            });
+        });
+        
+        // Generate random transaction
+        document.getElementById('generateRandom').addEventListener('click', function() {
+            fetch('/generate_random', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    addTransactionToUI(data.transaction);
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while generating a random transaction');
+            });
+        });
+        
+        // Check for predictions
+        document.getElementById('checkPredictions').addEventListener('click', checkPredictions);
+        
+        function checkPredictions() {
+            fetch('/check_predictions')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success' && data.predictions && data.predictions.length > 0) {
+                    data.predictions.forEach(pred => addPredictionToUI(pred));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+        
+        // Clear all data
+        document.getElementById('clearData').addEventListener('click', function() {
+            if (confirm('Are you sure you want to clear all data?')) {
+                fetch('/clear_data', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        document.getElementById('transactionsList').innerHTML = '<div class="alert alert-info">No transactions yet</div>';
+                        document.getElementById('predictionsList').innerHTML = '<div class="alert alert-info">No predictions yet</div>';
+                        document.getElementById('transactionBadge').textContent = '0';
+                        document.getElementById('predictionBadge').textContent = '0';
+                        document.getElementById('txCount').textContent = '0';
+                        document.getElementById('predCount').textContent = '0';
+                    } else {
+                        alert(`Error: ${data.message}`);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while clearing data');
+                });
+            }
+        });
+        
+        // Auto-refresh toggle
+        let refreshInterval;
+        document.getElementById('autoRefresh').addEventListener('change', function(e) {
+            if (e.target.checked) {
+                refreshInterval = setInterval(checkPredictions, 5000);
+            } else {
+                clearInterval(refreshInterval);
+            }
+        });
+        
+        // Helper function to add transaction to UI
+        function addTransactionToUI(tx) {
+            const txList = document.getElementById('transactionsList');
+            if (txList.innerHTML.includes('No transactions yet')) {
+                txList.innerHTML = '';
+            }
+            
+            const txCard = document.createElement('div');
+            txCard.className = 'card transaction-card';
+            txCard.innerHTML = `
+                <div class="card-body">
+                    <h5 class="card-title">Transaction: ${tx.transaction_id}</h5>
+                    <h6 class="card-subtitle mb-2 text-muted">Customer: ${tx.customer_id}</h6>
+                    <p class="card-text">
+                        Amount: $${tx.amount}<br>
+                        Status: ${tx.status}<br>
+                        Vendor ID: ${tx.vendor_id}
+                    </p>
+                    <div class="timestamp">${tx.timestamp}</div>
+                </div>
+            `;
+            
+            txList.insertBefore(txCard, txList.firstChild);
+            
+            // Update counts
+            const txCount = parseInt(document.getElementById('transactionBadge').textContent) + 1;
+            document.getElementById('transactionBadge').textContent = txCount;
+            document.getElementById('txCount').textContent = txCount;
+        }
+        
+        // Helper function to add prediction to UI
+        function addPredictionToUI(pred) {
+            const predList = document.getElementById('predictionsList');
+            if (predList.innerHTML.includes('No predictions yet')) {
+                predList.innerHTML = '';
+            }
+            
+            const predCard = document.createElement('div');
+            predCard.className = `card ${pred.prediction ? 'prediction-fraud' : 'prediction-card'}`;
+            predCard.innerHTML = `
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <h5 class="card-title">Result: ${pred.transaction_id}</h5>
+                        <span class="badge ${pred.prediction ? 'badge-fraud' : 'badge-legitimate'}">
+                            ${pred.prediction ? 'FRAUD' : 'LEGITIMATE'}
+                        </span>
+                    </div>
+                    <p class="card-text">
+                        Confidence: ${pred.confidence.toFixed(4)}<br>
+                        Model Version: ${pred.model_version}<br>
+                        Processor: ${pred.processor_rank}
+                    </p>
+                    <div class="timestamp">${pred.timestamp}</div>
+                </div>
+            `;
+            
+            predList.insertBefore(predCard, predList.firstChild);
+            
+            // Update counts
+            const predCount = parseInt(document.getElementById('predictionBadge').textContent) + 1;
+            document.getElementById('predictionBadge').textContent = predCount;
+            document.getElementById('predCount').textContent = predCount;
+        }
+    </script>
+</body>
+</html>
