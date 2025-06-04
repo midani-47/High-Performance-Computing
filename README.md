@@ -25,15 +25,14 @@ This project implements a distributed fraud detection system using MPI (Message 
 
 2. Activate the virtual environment
 ```bash
-python3 -m venv venv 
-#On Windows:
+python -m venv venv 
 .\venv\Scripts\activate
 
 #On macOS/Linux:
 source venv/bin/activate
 ```
 
-2. Install Python dependencies:
+3. Install Python dependencies:
    ```bash
    pip install mpi4py scikit-learn pandas numpy requests flask
    ```
