@@ -1,214 +1,326 @@
 #!/usr/bin/env python
 # encoding: utf8
 
-import json
 import os
+import sys
 import time
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import argparse
+import json
 import random
-import threading
+import argparse
+import traceback
 import webbrowser
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+import threading
+import requests
+from datetime import datetime, timezone
+from flask import Flask, request, render_template, jsonify
 
 # Constants
 QUEUE_SERVICE_URL = 'http://localhost:8000'
 TRANSACTION_QUEUE = 'TQ1'  # Transaction Queue name from Assignment 3
 PREDICTION_QUEUE = 'PQ1'    # Prediction Queue name from Assignment 3
-STATUSES = ['submitted', 'accepted', 'rejected']
-VENDOR_IDS = list(range(1, 101))  # Vendor IDs from 1 to 100
+MAX_RETRIES = 5  # Maximum number of retries for API calls
+RETRY_DELAY = 2  # Delay between retries in seconds
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'fraud_detection_ui_secret_key'
 
-# In-memory storage for demo purposes
+# In-memory storage for transactions and predictions
 transactions = []
 predictions = []
-
-# Mock token for API calls
-MOCK_TOKEN = "mock_token"
+queue_service_status = {'healthy': False, 'last_checked': None}
 
 
-@app.route('/')
-def index():
-    """Main page"""
-    return render_template('index.html', 
-                          transactions=transactions, 
-                          predictions=predictions,
-                          statuses=STATUSES,
-                          vendor_ids=VENDOR_IDS)
-
-
-@app.route('/submit_transaction', methods=['POST'])
-def submit_transaction():
-    """Submit a transaction to the queue"""
+def check_queue_service_health():
+    """Check if the queue service is healthy"""
     try:
-        # Get form data
-        customer_id = request.form.get('customer_id', f"cust-{random.randint(1, 1000)}")
-        amount = float(request.form.get('amount', random.uniform(10.0, 1000.0)))
-        status = request.form.get('status', random.choice(STATUSES))
-        vendor_id = int(request.form.get('vendor_id', random.choice(VENDOR_IDS)))
-        
-        # Create transaction object
-        transaction = {
-            "transaction_id": f"tx-{int(time.time())}-{len(transactions)}",
-            "customer_id": customer_id,
-            "timestamp": datetime.utcnow().isoformat(),
-            "status": status,
-            "vendor_id": vendor_id,
-            "amount": round(amount, 2)
-        }
-        
-        # Add to local storage
-        transactions.append(transaction)
-        
-        # Send to queue service
-        success = send_to_transaction_queue(transaction)
-        
-        if success:
-            return jsonify({"status": "success", "message": "Transaction submitted successfully", "transaction": transaction})
-        else:
-            return jsonify({"status": "error", "message": "Failed to submit transaction to queue"})
-    
+        response = requests.get(f"{QUEUE_SERVICE_URL}/health", timeout=5)
+        queue_service_status['healthy'] = response.status_code == 200
+        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        return queue_service_status['healthy']
+    except requests.exceptions.RequestException:
+        queue_service_status['healthy'] = False
+        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        return False
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        print(f"Unexpected error checking queue service health: {e}")
+        queue_service_status['healthy'] = False
+        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        return False
 
 
-@app.route('/generate_random', methods=['POST'])
-def generate_random():
-    """Generate and submit a random transaction"""
-    try:
-        # Create random transaction
-        transaction = {
-            "transaction_id": f"tx-{int(time.time())}-{len(transactions)}",
-            "customer_id": f"cust-{random.randint(1, 1000)}",
-            "timestamp": datetime.utcnow().isoformat(),
-            "status": random.choice(STATUSES),
-            "vendor_id": random.choice(VENDOR_IDS),
-            "amount": round(random.uniform(10.0, 1000.0), 2)
-        }
-        
-        # Add to local storage
-        transactions.append(transaction)
-        
-        # Send to queue service
-        success = send_to_transaction_queue(transaction)
-        
-        if success:
-            return jsonify({"status": "success", "message": "Random transaction generated", "transaction": transaction})
-        else:
-            return jsonify({"status": "error", "message": "Failed to submit transaction to queue"})
-    
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-
-@app.route('/check_predictions', methods=['GET'])
-def check_predictions():
-    """Check for new prediction results"""
-    try:
-        # Fetch from prediction queue
-        new_predictions = fetch_from_prediction_queue()
-        
-        if new_predictions:
-            # Add to local storage
-            predictions.extend(new_predictions)
-            return jsonify({"status": "success", "message": f"Found {len(new_predictions)} new predictions", "predictions": new_predictions})
-        else:
-            return jsonify({"status": "info", "message": "No new predictions found"})
-    
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-
-@app.route('/clear_data', methods=['POST'])
-def clear_data():
-    """Clear all local data"""
-    global transactions, predictions
-    transactions = []
-    predictions = []
-    return jsonify({"status": "success", "message": "All data cleared"})
-
-
-def send_to_transaction_queue(transaction):
-    """Send a transaction to the queue service"""
-    try:
-        # In a real implementation, this would use proper authentication
-        headers = {"Authorization": f"Bearer {MOCK_TOKEN}"}
-        
-        message = {
-            "content": transaction,
-            "message_type": "transaction"
-        }
-        
-        response = requests.post(
-            f"{QUEUE_SERVICE_URL}/api/queues/{TRANSACTION_QUEUE}/push",
-            headers=headers,
-            json=message
-        )
-        
-        if response.status_code == 201:
-            print(f"Transaction sent successfully: {transaction['transaction_id']}")
-            return True
-        else:
-            print(f"Failed to send transaction: {response.status_code} - {response.text}")
-            # For demo purposes, we'll consider it successful even if the API call fails
-            return True
-    except Exception as e:
-        print(f"Error sending transaction: {e}")
-        # For demo purposes, we'll consider it successful even if the API call fails
-        return True
-
-
-def fetch_from_prediction_queue(max_count=10):
-    """Fetch prediction results from the queue service"""
-    results = []
-    try:
-        # In a real implementation, this would use proper authentication
-        headers = {"Authorization": f"Bearer {MOCK_TOKEN}"}
-        
-        for _ in range(max_count):
+def push_to_transaction_queue(transaction):
+    """Push a transaction to the queue service with retry logic"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            # In a real implementation, this would use proper authentication
+            headers = {"Authorization": "Bearer mock_token", "Content-Type": "application/json"}
+            
+            message = {
+                "content": transaction,
+                "message_type": "transaction"
+            }
+            
             response = requests.post(
-                f"{QUEUE_SERVICE_URL}/api/queues/{PREDICTION_QUEUE}/pull",
-                headers=headers
+                f"{QUEUE_SERVICE_URL}/api/queues/{TRANSACTION_QUEUE}/push",
+                headers=headers,
+                json=message,
+                timeout=5  # Add timeout to prevent hanging
             )
             
-            if response.status_code == 200:
-                message = response.json()
-                if message and "content" in message:
-                    results.append(message["content"])
-            elif response.status_code == 404:
-                # Queue is empty
-                break
+            if response.status_code == 201:
+                print(f"Transaction sent successfully: {transaction['transaction_id']}")
+                return True
             else:
-                print(f"Failed to fetch prediction: {response.status_code} - {response.text}")
-                break
-    except Exception as e:
-        print(f"Error fetching predictions: {e}")
-        # For demo purposes, generate some mock predictions
-        if not results and transactions:
-            for tx in transactions[:3]:
-                if any(p["transaction_id"] == tx["transaction_id"] for p in predictions):
-                    continue
-                    
-                results.append({
-                    "transaction_id": tx["transaction_id"],
-                    "prediction": random.choice([True, False]),
-                    "confidence": round(random.uniform(0.6, 0.99), 4),
-                    "model_version": "1.0",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "processor_rank": random.randint(0, 4)
-                })
+                print(f"Failed to send transaction: {response.status_code} - {response.text}")
+                if attempt < MAX_RETRIES - 1:
+                    print(f"Retrying in {RETRY_DELAY} seconds...")
+                    time.sleep(RETRY_DELAY)
+                else:
+                    print("Max retries reached. Giving up.")
+                    return False
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending transaction (attempt {attempt+1}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print("Max retries reached. Giving up.")
+                return False
+        except Exception as e:
+            print(f"Unexpected error sending transaction: {e}")
+            traceback.print_exc()
+            return False
+    
+    return False
+
+
+def fetch_from_prediction_queue():
+    """Fetch predictions from the queue service with retry logic"""
+    results = []
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            # In a real implementation, this would use proper authentication
+            headers = {"Authorization": "Bearer mock_token"}
+            
+            # Try to pull multiple predictions (up to 10)
+            for _ in range(10):
+                response = requests.post(
+                    f"{QUEUE_SERVICE_URL}/api/queues/{PREDICTION_QUEUE}/pull",
+                    headers=headers,
+                    timeout=5  # Add timeout to prevent hanging
+                )
+                
+                if response.status_code == 200:
+                    message = response.json()
+                    if message and "content" in message:
+                        results.append(message["content"])
+                elif response.status_code == 404:
+                    # Queue is empty
+                    break
+                else:
+                    print(f"Unexpected status code: {response.status_code} - {response.text}")
+                    break
+            
+            # If we got here without exception, break the retry loop
+            break
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching predictions (attempt {attempt+1}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print("Max retries reached. Giving up.")
+                # If all retries fail, generate mock predictions for any transactions without predictions
+                return generate_mock_predictions()
+        except Exception as e:
+            print(f"Unexpected error fetching predictions: {e}")
+            traceback.print_exc()
+            # If exception occurs, generate mock predictions
+            return generate_mock_predictions()
+    
+    # If no predictions were fetched and all retries failed, generate mock predictions
+    if not results:
+        return generate_mock_predictions()
     
     return results
 
 
+def generate_mock_predictions():
+    """Generate mock predictions for transactions that don't have predictions yet"""
+    mock_results = []
+    
+    # Find transactions without predictions
+    prediction_tx_ids = {p["transaction_id"] for p in predictions}
+    unpredicted_txs = [tx for tx in transactions if tx["transaction_id"] not in prediction_tx_ids]
+    
+    for tx in unpredicted_txs:
+        # Generate a mock prediction
+        is_fraud = random.random() < 0.2  # 20% chance of fraud
+        confidence = random.uniform(0.6, 0.99) if is_fraud else random.uniform(0.7, 0.99)
+        
+        prediction = {
+            "transaction_id": tx["transaction_id"],
+            "prediction": is_fraud,
+            "confidence": confidence,
+            "model_version": "mock-1.0",
+            "timestamp": datetime.now(timezone.UTC).isoformat(),
+            "processor_rank": -1,  # Indicates mock prediction
+            "mock": True
+        }
+        
+        mock_results.append(prediction)
+    
+    return mock_results
+
+
+@app.route('/')
+def index():
+    """Render the main page"""
+    # Check queue service health
+    check_queue_service_health()
+    return render_template('index.html', 
+                           transactions=transactions, 
+                           predictions=predictions,
+                           queue_status=queue_service_status)
+
+
+@app.route('/submit', methods=['POST'])
+def submit_transaction():
+    """Submit a transaction"""
+    try:
+        # Get form data
+        customer_id = request.form.get('customer_id', f"cust-{random.randint(1000, 9999)}")
+        amount = float(request.form.get('amount', 0))
+        vendor_id = int(request.form.get('vendor_id', 0))
+        status = request.form.get('status', 'submitted')
+        
+        # Create transaction
+        transaction = {
+            "transaction_id": f"tx-{int(time.time())}-{random.randint(1000, 9999)}",
+            "customer_id": customer_id,
+            "amount": amount,
+            "vendor_id": vendor_id,
+            "status": status,
+            "timestamp": datetime.now(timezone.UTC).isoformat()
+        }
+        
+        # Add to in-memory storage
+        transactions.append(transaction)
+        
+        # Check queue service health
+        is_healthy = check_queue_service_health()
+        
+        # Push to queue service if healthy
+        queue_success = False
+        if is_healthy:
+            queue_success = push_to_transaction_queue(transaction)
+        
+        return jsonify({
+            "success": True,
+            "transaction": transaction,
+            "queue_service": {
+                "healthy": is_healthy,
+                "success": queue_success
+            }
+        })
+    except Exception as e:
+        print(f"Error submitting transaction: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/generate_random', methods=['POST'])
+def generate_random():
+    """Generate random transactions"""
+    try:
+        count = int(request.form.get('count', 1))
+        count = min(count, 10)  # Limit to 10 transactions at a time
+        
+        new_transactions = []
+        for _ in range(count):
+            # Create transaction
+            transaction = {
+                "transaction_id": f"tx-{int(time.time())}-{random.randint(1000, 9999)}",
+                "customer_id": f"cust-{random.randint(1000, 9999)}",
+                "amount": round(random.uniform(10.0, 1000.0), 2),
+                "vendor_id": random.randint(1, 100),
+                "status": random.choice(['submitted', 'accepted', 'rejected']),
+                "timestamp": datetime.now(timezone.UTC).isoformat()
+            }
+            
+            # Add to local storage
+            transactions.append(transaction)
+            new_transactions.append(transaction)
+            
+            # Push to queue service
+            push_to_transaction_queue(transaction)
+            
+            # Small delay to ensure unique timestamps
+            time.sleep(0.01)
+        
+        return jsonify({
+            "success": True,
+            "transactions": new_transactions,
+            "queue_status": queue_service_status
+        })
+    except Exception as e:
+        print(f"Error generating random transactions: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/check_predictions', methods=['POST'])
+def check_predictions():
+    """Check for new predictions"""
+    try:
+        # Check queue service health
+        check_queue_service_health()
+        
+        # Fetch predictions
+        new_predictions = fetch_from_prediction_queue()
+        
+        # Add to local storage (avoid duplicates)
+        prediction_ids = {p["transaction_id"] for p in predictions}
+        for prediction in new_predictions:
+            if prediction["transaction_id"] not in prediction_ids:
+                predictions.append(prediction)
+                prediction_ids.add(prediction["transaction_id"])
+        
+        return jsonify({
+            "success": True,
+            "new_predictions": new_predictions,
+            "total_predictions": len(predictions),
+            "queue_status": queue_service_status
+        })
+    except Exception as e:
+        print(f"Error checking predictions: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/clear', methods=['POST'])
+def clear_data():
+    """Clear all local data"""
+    try:
+        global transactions, predictions
+        transactions = []
+        predictions = []
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error clearing data: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy"}), 200
+
+
 def create_templates_folder():
-    """Create templates folder and index.html file"""
+    """Create the templates folder and index.html file"""
     templates_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
     os.makedirs(templates_dir, exist_ok=True)
     
@@ -221,338 +333,434 @@ def create_templates_folder():
     <title>Fraud Detection UI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { padding-top: 20px; }
-        .card { margin-bottom: 20px; }
-        .transaction-card { border-left: 5px solid #007bff; }
-        .prediction-card { border-left: 5px solid #28a745; }
-        .prediction-fraud { border-left: 5px solid #dc3545; }
-        .refresh-btn { margin-left: 10px; }
-        .timestamp { font-size: 0.8rem; color: #6c757d; }
-        .badge-fraud { background-color: #dc3545; }
-        .badge-legitimate { background-color: #28a745; }
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .card-header {
+            font-weight: bold;
+            background-color: #f1f1f1;
+        }
+        .transaction-item, .prediction-item {
+            border-bottom: 1px solid #eee;
+            padding: 10px;
+        }
+        .transaction-item:last-child, .prediction-item:last-child {
+            border-bottom: none;
+        }
+        .fraud-true {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .fraud-false {
+            color: #28a745;
+        }
+        .mock-prediction {
+            font-style: italic;
+            opacity: 0.8;
+        }
+        .queue-status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .queue-healthy {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .queue-unhealthy {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4">Fraud Detection System</h1>
+        <h1 class="mb-4">Fraud Detection System
+            <span id="queue-status-badge" class="queue-status queue-unhealthy">Queue Service: Offline</span>
+        </h1>
         
-        <div class="row mb-4">
+        <div class="row">
+            <!-- Transaction Form -->
             <div class="col-md-6">
                 <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Submit Transaction</h5>
-                        <button id="generateRandom" class="btn btn-sm btn-secondary">Generate Random</button>
-                    </div>
+                    <div class="card-header">Submit Transaction</div>
                     <div class="card-body">
-                        <form id="transactionForm">
+                        <form id="transaction-form">
                             <div class="mb-3">
-                                <label for="customerId" class="form-label">Customer ID</label>
-                                <input type="text" class="form-control" id="customerId" placeholder="e.g., cust-123">
+                                <label for="customer-id" class="form-label">Customer ID</label>
+                                <input type="text" class="form-control" id="customer-id" placeholder="e.g., cust-1234">
                             </div>
                             <div class="mb-3">
                                 <label for="amount" class="form-label">Amount</label>
-                                <input type="number" class="form-control" id="amount" min="10" max="1000" step="0.01" placeholder="Amount in $">
+                                <input type="number" class="form-control" id="amount" step="0.01" min="0" placeholder="e.g., 100.00">
+                            </div>
+                            <div class="mb-3">
+                                <label for="vendor-id" class="form-label">Vendor ID</label>
+                                <input type="number" class="form-control" id="vendor-id" placeholder="e.g., 42">
                             </div>
                             <div class="mb-3">
                                 <label for="status" class="form-label">Status</label>
-                                <select class="form-control" id="status">
-                                    {% for status in statuses %}
-                                    <option value="{{ status }}">{{ status }}</option>
-                                    {% endfor %}
+                                <select class="form-select" id="status">
+                                    <option value="submitted">Submitted</option>
+                                    <option value="accepted">Accepted</option>
+                                    <option value="rejected">Rejected</option>
                                 </select>
                             </div>
-                            <div class="mb-3">
-                                <label for="vendorId" class="form-label">Vendor ID</label>
-                                <select class="form-control" id="vendorId">
-                                    {% for vendor_id in vendor_ids %}
-                                    <option value="{{ vendor_id }}">{{ vendor_id }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <button type="submit" class="btn btn-primary">Submit Transaction</button>
+                            <button type="submit" class="btn btn-primary">Submit</button>
                         </form>
                     </div>
                 </div>
+                
+                <div class="card">
+                    <div class="card-header">Generate Random Transactions</div>
+                    <div class="card-body">
+                        <form id="random-form">
+                            <div class="mb-3">
+                                <label for="count" class="form-label">Number of Transactions</label>
+                                <input type="number" class="form-control" id="count" min="1" max="10" value="3">
+                            </div>
+                            <button type="submit" class="btn btn-success">Generate</button>
+                        </form>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">Controls</div>
+                    <div class="card-body">
+                        <button id="check-predictions-btn" class="btn btn-info me-2">Check for Predictions</button>
+                        <button id="clear-data-btn" class="btn btn-danger">Clear All Data</button>
+                    </div>
+                </div>
             </div>
             
+            <!-- Data Display -->
             <div class="col-md-6">
                 <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Controls</h5>
-                        <button id="clearData" class="btn btn-sm btn-danger">Clear All Data</button>
+                    <div class="card-header">
+                        Transactions <span id="transaction-count" class="badge bg-primary">{{ transactions|length }}</span>
                     </div>
-                    <div class="card-body">
-                        <p>Use this panel to control the fraud detection system.</p>
-                        <div class="d-flex">
-                            <button id="checkPredictions" class="btn btn-success">Check for Predictions</button>
-                            <div class="form-check ms-3 mt-2">
-                                <input class="form-check-input" type="checkbox" id="autoRefresh">
-                                <label class="form-check-label" for="autoRefresh">
-                                    Auto-refresh (5s)
-                                </label>
+                    <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                        <div id="transactions-container">
+                            {% for tx in transactions %}
+                            <div class="transaction-item" data-id="{{ tx.transaction_id }}">
+                                <div><strong>ID:</strong> {{ tx.transaction_id }}</div>
+                                <div><strong>Customer:</strong> {{ tx.customer_id }}</div>
+                                <div><strong>Amount:</strong> ${{ tx.amount }}</div>
+                                <div><strong>Status:</strong> {{ tx.status }}</div>
+                                <div><strong>Vendor:</strong> {{ tx.vendor_id }}</div>
                             </div>
-                        </div>
-                        <div class="mt-3">
-                            <p><strong>Stats:</strong></p>
-                            <p>Transactions: <span id="txCount">{{ transactions|length }}</span></p>
-                            <p>Predictions: <span id="predCount">{{ predictions|length }}</span></p>
+                            {% else %}
+                            <div id="no-transactions">No transactions yet.</div>
+                            {% endfor %}
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <div class="row">
-            <div class="col-md-6">
-                <h4 class="d-flex justify-content-between align-items-center mb-3">
-                    <span>Transactions</span>
-                    <span class="badge bg-primary rounded-pill" id="transactionBadge">{{ transactions|length }}</span>
-                </h4>
-                <div id="transactionsList">
-                    {% for tx in transactions %}
-                    <div class="card transaction-card">
-                        <div class="card-body">
-                            <h5 class="card-title">Transaction: {{ tx.transaction_id }}</h5>
-                            <h6 class="card-subtitle mb-2 text-muted">Customer: {{ tx.customer_id }}</h6>
-                            <p class="card-text">
-                                Amount: ${{ tx.amount }}<br>
-                                Status: {{ tx.status }}<br>
-                                Vendor ID: {{ tx.vendor_id }}
-                            </p>
-                            <div class="timestamp">{{ tx.timestamp }}</div>
-                        </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        Predictions <span id="prediction-count" class="badge bg-primary">{{ predictions|length }}</span>
                     </div>
-                    {% else %}
-                    <div class="alert alert-info">No transactions yet</div>
-                    {% endfor %}
-                </div>
-            </div>
-            
-            <div class="col-md-6">
-                <h4 class="d-flex justify-content-between align-items-center mb-3">
-                    <span>Prediction Results</span>
-                    <span class="badge bg-success rounded-pill" id="predictionBadge">{{ predictions|length }}</span>
-                </h4>
-                <div id="predictionsList">
-                    {% for pred in predictions %}
-                    <div class="card {% if pred.prediction %}prediction-fraud{% else %}prediction-card{% endif %}">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between">
-                                <h5 class="card-title">Result: {{ pred.transaction_id }}</h5>
-                                <span class="badge {% if pred.prediction %}badge-fraud{% else %}badge-legitimate{% endif %}">
-                                    {% if pred.prediction %}FRAUD{% else %}LEGITIMATE{% endif %}
-                                </span>
+                    <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                        <div id="predictions-container">
+                            {% for pred in predictions %}
+                            <div class="prediction-item{% if pred.mock %} mock-prediction{% endif %}" data-id="{{ pred.transaction_id }}">
+                                <div><strong>Transaction ID:</strong> {{ pred.transaction_id }}</div>
+                                <div>
+                                    <strong>Fraud:</strong> 
+                                    <span class="{% if pred.prediction %}fraud-true{% else %}fraud-false{% endif %}">
+                                        {{ pred.prediction }}
+                                    </span>
+                                </div>
+                                <div><strong>Confidence:</strong> {{ "%.2f"|format(pred.confidence*100) }}%</div>
+                                <div><strong>Model:</strong> {{ pred.model_version }}</div>
+                                <div><strong>Processor:</strong> {{ pred.processor_rank }}</div>
+                                {% if pred.mock %}<div><em>(Mock Prediction)</em></div>{% endif %}
                             </div>
-                            <p class="card-text">
-                                Confidence: {{ pred.confidence|round(4) }}<br>
-                                Model Version: {{ pred.model_version }}<br>
-                                Processor: {{ pred.processor_rank }}
-                            </p>
-                            <div class="timestamp">{{ pred.timestamp }}</div>
+                            {% else %}
+                            <div id="no-predictions">No predictions yet.</div>
+                            {% endfor %}
                         </div>
                     </div>
-                    {% else %}
-                    <div class="alert alert-info">No predictions yet</div>
-                    {% endfor %}
                 </div>
             </div>
         </div>
     </div>
-
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Form submission
-        document.getElementById('transactionForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            const customerId = document.getElementById('customerId').value || `cust-${Math.floor(Math.random() * 1000)}`;
-            const amount = document.getElementById('amount').value || (Math.random() * 990 + 10).toFixed(2);
-            const status = document.getElementById('status').value;
-            const vendorId = document.getElementById('vendorId').value;
+        // Update queue status badge
+        function updateQueueStatus(healthy) {
+            const badge = document.getElementById('queue-status-badge');
+            if (healthy) {
+                badge.className = 'queue-status queue-healthy';
+                badge.textContent = 'Queue Service: Online';
+            } else {
+                badge.className = 'queue-status queue-unhealthy';
+                badge.textContent = 'Queue Service: Offline';
+            }
+        }
+        
+        // Initialize queue status
+        updateQueueStatus({{ queue_status.healthy|tojson }});
+        
+        // Add a transaction to the UI
+        function addTransaction(transaction) {
+            const container = document.getElementById('transactions-container');
+            const noTransactions = document.getElementById('no-transactions');
+            if (noTransactions) {
+                noTransactions.remove();
+            }
             
-            fetch('/submit_transaction', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: `customer_id=${encodeURIComponent(customerId)}&amount=${encodeURIComponent(amount)}&status=${encodeURIComponent(status)}&vendor_id=${encodeURIComponent(vendorId)}`
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    addTransactionToUI(data.transaction);
-                    document.getElementById('transactionForm').reset();
+            const txElement = document.createElement('div');
+            txElement.className = 'transaction-item';
+            txElement.dataset.id = transaction.transaction_id;
+            txElement.innerHTML = `
+                <div><strong>ID:</strong> ${transaction.transaction_id}</div>
+                <div><strong>Customer:</strong> ${transaction.customer_id}</div>
+                <div><strong>Amount:</strong> $${transaction.amount}</div>
+                <div><strong>Status:</strong> ${transaction.status}</div>
+                <div><strong>Vendor:</strong> ${transaction.vendor_id}</div>
+            `;
+            
+            container.appendChild(txElement);
+            
+            // Update count
+            const countElement = document.getElementById('transaction-count');
+            countElement.textContent = container.querySelectorAll('.transaction-item').length;
+        }
+        
+        // Add a prediction to the UI
+        function addPrediction(prediction) {
+            const container = document.getElementById('predictions-container');
+            const noPredictions = document.getElementById('no-predictions');
+            if (noPredictions) {
+                noPredictions.remove();
+            }
+            
+            // Check if prediction already exists
+            const existingPrediction = document.querySelector(`.prediction-item[data-id="${prediction.transaction_id}"]`);
+            if (existingPrediction) {
+                return; // Skip if already exists
+            }
+            
+            const predElement = document.createElement('div');
+            predElement.className = 'prediction-item';
+            if (prediction.mock) {
+                predElement.className += ' mock-prediction';
+            }
+            predElement.dataset.id = prediction.transaction_id;
+            
+            const fraudClass = prediction.prediction ? 'fraud-true' : 'fraud-false';
+            const confidencePercent = (prediction.confidence * 100).toFixed(2);
+            
+            predElement.innerHTML = `
+                <div><strong>Transaction ID:</strong> ${prediction.transaction_id}</div>
+                <div>
+                    <strong>Fraud:</strong> 
+                    <span class="${fraudClass}">
+                        ${prediction.prediction}
+                    </span>
+                </div>
+                <div><strong>Confidence:</strong> ${confidencePercent}%</div>
+                <div><strong>Model:</strong> ${prediction.model_version}</div>
+                <div><strong>Processor:</strong> ${prediction.processor_rank}</div>
+                ${prediction.mock ? '<div><em>(Mock Prediction)</em></div>' : ''}
+            `;
+            
+            container.appendChild(predElement);
+            
+            // Update count
+            const countElement = document.getElementById('prediction-count');
+            countElement.textContent = container.querySelectorAll('.prediction-item').length;
+        }
+        
+        // Submit transaction form
+        document.getElementById('transaction-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('customer_id', document.getElementById('customer-id').value || `cust-${Math.floor(Math.random() * 9000) + 1000}`);
+            formData.append('amount', document.getElementById('amount').value || Math.random() * 1000);
+            formData.append('vendor_id', document.getElementById('vendor-id').value || Math.floor(Math.random() * 100) + 1);
+            formData.append('status', document.getElementById('status').value);
+            
+            try {
+                const response = await fetch('/submit', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    addTransaction(data.transaction);
+                    updateQueueStatus(data.queue_status.healthy);
+                    // Reset form
+                    document.getElementById('transaction-form').reset();
                 } else {
-                    alert(`Error: ${data.message}`);
+                    alert('Error: ' + data.error);
                 }
-            })
-            .catch(error => {
+            } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred while submitting the transaction');
-            });
+                alert('An error occurred. Please try again.');
+            }
         });
         
-        // Generate random transaction
-        document.getElementById('generateRandom').addEventListener('click', function() {
-            fetch('/generate_random', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    addTransactionToUI(data.transaction);
+        // Generate random transactions
+        document.getElementById('random-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('count', document.getElementById('count').value || 1);
+            
+            try {
+                const response = await fetch('/generate_random', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    data.transactions.forEach(tx => addTransaction(tx));
+                    updateQueueStatus(data.queue_status.healthy);
                 } else {
-                    alert(`Error: ${data.message}`);
+                    alert('Error: ' + data.error);
                 }
-            })
-            .catch(error => {
+            } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred while generating a random transaction');
-            });
+                alert('An error occurred. Please try again.');
+            }
         });
         
         // Check for predictions
-        document.getElementById('checkPredictions').addEventListener('click', checkPredictions);
-        
-        function checkPredictions() {
-            fetch('/check_predictions')
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success' && data.predictions && data.predictions.length > 0) {
-                    data.predictions.forEach(pred => addPredictionToUI(pred));
+        document.getElementById('check-predictions-btn').addEventListener('click', async () => {
+            try {
+                const response = await fetch('/check_predictions', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    data.new_predictions.forEach(pred => addPrediction(pred));
+                    updateQueueStatus(data.queue_status.healthy);
+                } else {
+                    alert('Error: ' + data.error);
                 }
-            })
-            .catch(error => {
+            } catch (error) {
                 console.error('Error:', error);
-            });
-        }
+                alert('An error occurred. Please try again.');
+            }
+        });
         
         // Clear all data
-        document.getElementById('clearData').addEventListener('click', function() {
-            if (confirm('Are you sure you want to clear all data?')) {
-                fetch('/clear_data', {
+        document.getElementById('clear-data-btn').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to clear all data?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/clear', {
                     method: 'POST'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        document.getElementById('transactionsList').innerHTML = '<div class="alert alert-info">No transactions yet</div>';
-                        document.getElementById('predictionsList').innerHTML = '<div class="alert alert-info">No predictions yet</div>';
-                        document.getElementById('transactionBadge').textContent = '0';
-                        document.getElementById('predictionBadge').textContent = '0';
-                        document.getElementById('txCount').textContent = '0';
-                        document.getElementById('predCount').textContent = '0';
-                    } else {
-                        alert(`Error: ${data.message}`);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('An error occurred while clearing data');
                 });
+                
+                const data = await response.json();
+                if (data.success) {
+                    // Clear UI
+                    document.getElementById('transactions-container').innerHTML = '<div id="no-transactions">No transactions yet.</div>';
+                    document.getElementById('predictions-container').innerHTML = '<div id="no-predictions">No predictions yet.</div>';
+                    document.getElementById('transaction-count').textContent = '0';
+                    document.getElementById('prediction-count').textContent = '0';
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred. Please try again.');
             }
         });
         
-        // Auto-refresh toggle
-        let refreshInterval;
-        document.getElementById('autoRefresh').addEventListener('change', function(e) {
-            if (e.target.checked) {
-                refreshInterval = setInterval(checkPredictions, 5000);
-            } else {
-                clearInterval(refreshInterval);
+        // Auto-check for predictions every 5 seconds
+        setInterval(async () => {
+            try {
+                const response = await fetch('/check_predictions', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    data.new_predictions.forEach(pred => addPrediction(pred));
+                    updateQueueStatus(data.queue_status.healthy);
+                }
+            } catch (error) {
+                console.error('Error auto-checking predictions:', error);
             }
-        });
-        
-        // Helper function to add transaction to UI
-        function addTransactionToUI(tx) {
-            const txList = document.getElementById('transactionsList');
-            if (txList.innerHTML.includes('No transactions yet')) {
-                txList.innerHTML = '';
-            }
-            
-            const txCard = document.createElement('div');
-            txCard.className = 'card transaction-card';
-            txCard.innerHTML = `
-                <div class="card-body">
-                    <h5 class="card-title">Transaction: ${tx.transaction_id}</h5>
-                    <h6 class="card-subtitle mb-2 text-muted">Customer: ${tx.customer_id}</h6>
-                    <p class="card-text">
-                        Amount: $${tx.amount}<br>
-                        Status: ${tx.status}<br>
-                        Vendor ID: ${tx.vendor_id}
-                    </p>
-                    <div class="timestamp">${tx.timestamp}</div>
-                </div>
-            `;
-            
-            txList.insertBefore(txCard, txList.firstChild);
-            
-            // Update counts
-            const txCount = parseInt(document.getElementById('transactionBadge').textContent) + 1;
-            document.getElementById('transactionBadge').textContent = txCount;
-            document.getElementById('txCount').textContent = txCount;
-        }
-        
-        // Helper function to add prediction to UI
-        function addPredictionToUI(pred) {
-            const predList = document.getElementById('predictionsList');
-            if (predList.innerHTML.includes('No predictions yet')) {
-                predList.innerHTML = '';
-            }
-            
-            const predCard = document.createElement('div');
-            predCard.className = `card ${pred.prediction ? 'prediction-fraud' : 'prediction-card'}`;
-            predCard.innerHTML = `
-                <div class="card-body">
-                    <div class="d-flex justify-content-between">
-                        <h5 class="card-title">Result: ${pred.transaction_id}</h5>
-                        <span class="badge ${pred.prediction ? 'badge-fraud' : 'badge-legitimate'}">
-                            ${pred.prediction ? 'FRAUD' : 'LEGITIMATE'}
-                        </span>
-                    </div>
-                    <p class="card-text">
-                        Confidence: ${pred.confidence.toFixed(4)}<br>
-                        Model Version: ${pred.model_version}<br>
-                        Processor: ${pred.processor_rank}
-                    </p>
-                    <div class="timestamp">${pred.timestamp}</div>
-                </div>
-            `;
-            
-            predList.insertBefore(predCard, predList.firstChild);
-            
-            // Update counts
-            const predCount = parseInt(document.getElementById('predictionBadge').textContent) + 1;
-            document.getElementById('predictionBadge').textContent = predCount;
-            document.getElementById('predCount').textContent = predCount;
-        }
+        }, 5000);
     </script>
 </body>
 </html>
 '''
     
-    with open(os.path.join(templates_dir, 'index.html'), 'w') as f:
+    index_path = os.path.join(templates_dir, 'index.html')
+    with open(index_path, 'w') as f:
         f.write(index_html)
+    
+    print(f"Created templates folder and index.html at {index_path}")
 
 
-def open_browser():
-    """Open browser after a short delay"""
-    time.sleep(1.5)
-    webbrowser.open('http://127.0.0.1:5000')
+def open_browser(port):
+    """Open the browser after a short delay"""
+    def _open_browser():
+        # Add a longer delay to ensure Flask server is fully started
+        time.sleep(3)
+        try:
+            webbrowser.open(f'http://localhost:{port}/')
+            print(f"Opened browser at http://localhost:{port}/")
+        except Exception as e:
+            print(f"Error opening browser: {e}")
+    
+    # Only open browser in the main process when not in debug mode or when in the main thread of debug mode
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+        thread = threading.Thread(target=_open_browser)
+        thread.daemon = True
+        thread.start()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fraud Detection UI")
     parser.add_argument("--port", type=int, default=5000, help="Port to run the UI on")
     parser.add_argument("--no-browser", action="store_true", help="Don't open browser automatically")
+    parser.add_argument("--queue-url", type=str, help="URL of the queue service")
+    parser.add_argument("--no-debug", action="store_true", help="Disable Flask debug mode")
     
     args = parser.parse_args()
+    
+    # Override queue service URL if provided
+    if args.queue_url:
+        QUEUE_SERVICE_URL = args.queue_url
+        print(f"Using queue service at: {QUEUE_SERVICE_URL}")
     
     # Create templates folder and index.html
     create_templates_folder()
     
-    # Open browser automatically
-    if not args.no_browser:
-        threading.Thread(target=open_browser).start()
+    # Open browser
+    if not args.no_browser and not os.environ.get('WERKZEUG_RUN_MAIN'):
+        open_browser(args.port)
     
-    # Run Flask app
-    app.run(debug=True, port=args.port)
+    # Run the app
+    debug_mode = not args.no_debug
+    app.run(
+        host='127.0.0.1',
+        port=args.port,
+        debug=debug_mode,
+        use_reloader=debug_mode
+    )

@@ -7,9 +7,10 @@ This project implements a distributed fraud detection system using MPI (Message 
 - `fraud_detection_mpi.py`: Main MPI implementation for distributed fraud detection
 - `test_fraud_detection.py`: Test script for evaluating the fraud detection model
 - `fraud_detection_ui.py`: Web-based UI for submitting transactions and viewing results
+- `queue_service.py`: Simple queue service implementation for transaction and prediction queues
 - `DOCUMENTATION.md`: Comprehensive technical documentation
 - `mpi/`: Directory containing reference code and the pre-trained model
-- `a3/`: Directory containing the queue service from Assignment 3
+- `a3/queue_data/`: Directory containing the queue data files
 
 ## Prerequisites
 
@@ -56,15 +57,17 @@ Options:
 To run the MPI service with mock data (no queue service required):
 
 ```bash
+mpiexec -n 5 python fraud_detection_mpi.py --mock
+
+# or
 mpirun -n 5 python fraud_detection_mpi.py --mock
 ```
 
-To run the MPI service with the queue service from Assignment 3:
+To run the MPI service with the queue service:
 
 ```bash
 # First, start the queue service
-cd a3/queue_service
-uvicorn app.main:app --reload
+python queue_service.py
 
 # In another terminal, run the MPI service
 mpirun -n 5 python fraud_detection_mpi.py
@@ -95,8 +98,7 @@ To test the complete system:
 
 1. Start the queue service:
    ```bash
-   cd a3/queue_service
-   uvicorn app.main:app --reload
+   python queue_service.py
    ```
 
 2. Start the MPI service:
@@ -110,6 +112,21 @@ To test the complete system:
    ```
 
 4. Use the UI to submit transactions and view prediction results
+
+## Queue Service API
+
+The queue service provides the following endpoints:
+
+- `GET /api/queues`: List all available queues
+- `POST /api/queues/<queue_name>/push`: Push a message to a queue
+- `POST /api/queues/<queue_name>/pull`: Pull a message from a queue
+- `GET /api/queues/<queue_name>/peek`: Peek at a queue without removing messages
+- `POST /api/queues/<queue_name>/clear`: Clear all messages from a queue
+
+All API calls require an Authorization header with a Bearer token:
+```
+Authorization: Bearer mock_token
+```
 
 ## Documentation
 
