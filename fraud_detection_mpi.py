@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from mpi4py import MPI
 
 # Constants
-QUEUE_SERVICE_URL = 'http://localhost:8000'
+QUEUE_SERVICE_URL = 'http://localhost:8000'  # Default, can be overridden by command line
 TRANSACTION_QUEUE = 'TQ1'  # Transaction Queue name from Assignment 3
 PREDICTION_QUEUE = 'PQ1'    # Prediction Queue name from Assignment 3
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mpi', 'fraud_rf_model.pkl')  # Absolute path to the trained model
@@ -547,6 +547,8 @@ if __name__ == "__main__":
         
         # Override queue service URL if provided
         if args.queue_url:
+            # Modify the module-level variable directly
+            # No need for global declaration in the main block
             QUEUE_SERVICE_URL = args.queue_url
             print(f"Using queue service at: {QUEUE_SERVICE_URL}")
         

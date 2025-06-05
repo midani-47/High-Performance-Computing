@@ -36,15 +36,22 @@ def check_queue_service_health():
         response = requests.get(f"{QUEUE_SERVICE_URL}/health", timeout=5)
         queue_service_status['healthy'] = response.status_code == 200
         queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
+        queue_service_status['url'] = QUEUE_SERVICE_URL
+        print(f"Queue service health check: {queue_service_status['healthy']} at {QUEUE_SERVICE_URL}")
         return queue_service_status['healthy']
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        print(f"Queue service connection error: {e}")
         queue_service_status['healthy'] = False
         queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
+        queue_service_status['url'] = QUEUE_SERVICE_URL
+        queue_service_status['error'] = str(e)
         return False
     except Exception as e:
         print(f"Unexpected error checking queue service health: {e}")
         queue_service_status['healthy'] = False
         queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
+        queue_service_status['url'] = QUEUE_SERVICE_URL
+        queue_service_status['error'] = str(e)
         return False
 
 
@@ -154,10 +161,13 @@ def generate_mock_predictions():
     prediction_tx_ids = {p["transaction_id"] for p in predictions}
     unpredicted_txs = [tx for tx in transactions if tx["transaction_id"] not in prediction_tx_ids]
     
-    for tx in unpredicted_txs:
+    for i, tx in enumerate(unpredicted_txs):
         # Generate a mock prediction
         is_fraud = random.random() < 0.2  # 20% chance of fraud
         confidence = random.uniform(0.6, 0.99) if is_fraud else random.uniform(0.7, 0.99)
+        
+        # Assign processor rank in round-robin fashion (simulating multiple processors)
+        processor_rank = (i % 4) + 1  # Use processors 1-4
         
         prediction = {
             "transaction_id": tx["transaction_id"],
@@ -165,11 +175,30 @@ def generate_mock_predictions():
             "confidence": confidence,
             "model_version": "mock-1.0",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "processor_rank": -1,  # Indicates mock prediction
+            "processor_rank": processor_rank,
             "mock": True
         }
         
         mock_results.append(prediction)
+        
+        # Also try to push to prediction queue if queue service is healthy
+        if check_queue_service_health():
+            try:
+                headers = {"Authorization": "Bearer mock_token", "Content-Type": "application/json"}
+                message = {
+                    "content": prediction,
+                    "message_type": "prediction"
+                }
+                response = requests.post(
+                    f"{QUEUE_SERVICE_URL}/api/queues/{PREDICTION_QUEUE}/push",
+                    headers=headers,
+                    json=message,
+                    timeout=5
+                )
+                if response.status_code == 201:
+                    print(f"Mock prediction stored in queue: {prediction['transaction_id']}")
+            except Exception as e:
+                print(f"Failed to store mock prediction in queue: {e}")
     
     return mock_results
 
@@ -182,18 +211,32 @@ def index():
     return render_template('index.html', 
                            transactions=transactions, 
                            predictions=predictions,
-                           queue_status=queue_service_status)
+                           queue_status=queue_service_status,
+                           queue_service_url=QUEUE_SERVICE_URL)
 
 
 @app.route('/submit', methods=['POST'])
 def submit_transaction():
     """Submit a transaction"""
     try:
-        # Get form data
-        customer_id = request.form.get('customer_id', f"cust-{random.randint(1000, 9999)}")
-        amount = float(request.form.get('amount', 0))
-        vendor_id = int(request.form.get('vendor_id', 0))
-        status = request.form.get('status', 'submitted')
+        # Get form data - handle both form data and JSON data
+        if request.is_json:
+            data = request.get_json()
+            customer_id = data.get('customer_id', f"cust-{random.randint(1000, 9999)}")
+            amount = float(data.get('amount', 0))
+            vendor_id = int(data.get('vendor_id', 0))
+            status = data.get('status', 'submitted')
+        else:
+            customer_id = request.form.get('customer_id', f"cust-{random.randint(1000, 9999)}")
+            amount = float(request.form.get('amount', 0))
+            vendor_id = int(request.form.get('vendor_id', 0))
+            status = request.form.get('status', 'submitted')
+        
+        # Validate inputs
+        if amount <= 0:
+            return jsonify({"success": False, "error": "Amount must be greater than 0"}), 400
+        if vendor_id <= 0:
+            return jsonify({"success": False, "error": "Vendor ID must be greater than 0"}), 400
         
         # Create transaction
         transaction = {
@@ -224,6 +267,9 @@ def submit_transaction():
                 "success": queue_success
             }
         })
+    except ValueError as e:
+        print(f"Validation error submitting transaction: {e}")
+        return jsonify({"success": False, "error": f"Invalid input: {str(e)}"}), 400
     except Exception as e:
         print(f"Error submitting transaction: {e}")
         traceback.print_exc()
@@ -315,8 +361,19 @@ def clear_data():
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy"}), 200
+    """Health check endpoint that also checks queue service health"""
+    # Check queue service health
+    queue_healthy = check_queue_service_health()
+    
+    return jsonify({
+        "status": "healthy",
+        "queue_service": {
+            "healthy": queue_healthy,
+            "url": QUEUE_SERVICE_URL,
+            "last_checked": queue_service_status.get('last_checked'),
+            "error": queue_service_status.get('error')
+        }
+    }), 200
 
 
 def create_templates_folder():
@@ -499,6 +556,9 @@ def create_templates_folder():
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Store queue service URL in document for easy access
+        document.queueServiceUrl = "{{ queue_service_url }}";
+        
         // Update queue status badge
         function updateQueueStatus(healthy) {
             const badge = document.getElementById('queue-status-badge');
@@ -508,6 +568,20 @@ def create_templates_folder():
             } else {
                 badge.className = 'queue-status queue-unhealthy';
                 badge.textContent = 'Queue Service: Offline';
+            }
+        }
+        
+        // Check queue service health directly
+        async function checkQueueHealth() {
+            try {
+                const response = await fetch(`${document.queueServiceUrl}/health`, {
+                    method: 'GET',
+                    timeout: 5000
+                });
+                return response.status === 200;
+            } catch (error) {
+                console.error('Error checking queue health:', error);
+                return false;
             }
         }
         
@@ -589,6 +663,19 @@ def create_templates_folder():
         document.getElementById('transaction-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             
+            // Check queue service health first
+            let isHealthy = false;
+            try {
+                isHealthy = await checkQueueHealth();
+                updateQueueStatus(isHealthy);
+                
+                if (!isHealthy) {
+                    alert('Queue service is offline. Your transaction will be stored locally but may not be processed until the queue service is back online.');
+                }
+            } catch (error) {
+                console.error('Error checking queue health:', error);
+            }
+            
             const formData = new FormData();
             formData.append('customer_id', document.getElementById('customer-id').value || `cust-${Math.floor(Math.random() * 9000) + 1000}`);
             formData.append('amount', document.getElementById('amount').value || Math.random() * 1000);
@@ -604,9 +691,16 @@ def create_templates_folder():
                 const data = await response.json();
                 if (data.success) {
                     addTransaction(data.transaction);
-                    updateQueueStatus(data.queue_status.healthy);
+                    updateQueueStatus(data.queue_service.healthy);
                     // Reset form
                     document.getElementById('transaction-form').reset();
+                    
+                    // Show appropriate message based on queue service status
+                    if (!data.queue_service.healthy) {
+                        alert('Transaction saved locally. Queue service is offline, so it will be processed when the service is back online.');
+                    } else if (!data.queue_service.success) {
+                        alert('Transaction saved locally but could not be sent to the queue service. It will be processed when the service is available.');
+                    }
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -619,6 +713,19 @@ def create_templates_folder():
         // Generate random transactions
         document.getElementById('random-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            // Check queue service health first
+            let isHealthy = false;
+            try {
+                isHealthy = await checkQueueHealth();
+                updateQueueStatus(isHealthy);
+                
+                if (!isHealthy) {
+                    alert('Queue service is offline. Random transactions will be stored locally but may not be processed until the queue service is back online.');
+                }
+            } catch (error) {
+                console.error('Error checking queue health:', error);
+            }
             
             const formData = new FormData();
             formData.append('count', document.getElementById('count').value || 1);
@@ -633,6 +740,11 @@ def create_templates_folder():
                 if (data.success) {
                     data.transactions.forEach(tx => addTransaction(tx));
                     updateQueueStatus(data.queue_status.healthy);
+                    
+                    // Show appropriate message based on queue service status
+                    if (!data.queue_status.healthy) {
+                        alert('Transactions saved locally. Queue service is offline, so they will be processed when the service is back online.');
+                    }
                 } else {
                     alert('Error: ' + data.error);
                 }
@@ -692,6 +804,19 @@ def create_templates_folder():
         // Auto-check for predictions every 5 seconds
         setInterval(async () => {
             try {
+                // First check queue service health directly
+                try {
+                    const healthResponse = await fetch(`${document.queueServiceUrl}/health`, {
+                        method: 'GET',
+                        timeout: 3000
+                    });
+                    updateQueueStatus(healthResponse.status === 200);
+                } catch (healthError) {
+                    console.error('Error checking queue health:', healthError);
+                    updateQueueStatus(false);
+                }
+                
+                // Then check for new predictions
                 const response = await fetch('/check_predictions', {
                     method: 'POST'
                 });

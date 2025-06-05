@@ -10,7 +10,7 @@ This project implements a distributed fraud detection system using MPI (Message 
 - `queue_service.py`: Simple queue service implementation for transaction and prediction queues
 - `DOCUMENTATION.md`: Comprehensive technical documentation
 - `mpi/`: Directory containing reference code and the pre-trained model
-- `a3/queue_data/`: Directory containing the queue data files
+- `a3/queue_data/`: Directory containing the queue data files (TQ1.json for transactions and PQ1.json for predictions)
 
 ## Prerequisites
 
@@ -22,21 +22,37 @@ This project implements a distributed fraud detection system using MPI (Message 
 
 1. Install OpenMPI:
    - On macOS: `brew install open-mpi`
-   - On Ubuntu: `sudo apt-get install libopenmpi-dev`
+   - On Ubuntu/Debian: `sudo apt-get install libopenmpi-dev`
+   - On Windows: Download and install from [Open MPI for Windows](https://www.open-mpi.org/software/ompi/v4.1/) or use Microsoft MPI
 
-2. Activate the virtual environment
-```bash
-python -m venv venv 
-.\venv\Scripts\activate
+2. Create and activate a virtual environment:
 
-#On macOS/Linux:
-source venv/bin/activate
-```
+   ```bash
+   # Create virtual environment
+   python -m venv venv
+   
+   # Activate on Windows
+   venv\Scripts\activate
+   
+   # Activate on macOS/Linux
+   source venv/bin/activate
+   ```
 
 3. Install Python dependencies:
    ```bash
    pip install mpi4py scikit-learn pandas numpy requests flask
    ```
+
+4. Create the queue data directory:
+   ```bash
+   # On macOS/Linux
+   mkdir -p a3/queue_data
+   
+   # On Windows
+   mkdir a3\queue_data
+   ```
+   
+   This directory will store the transaction queue (TQ1.json) and prediction queue (PQ1.json) files.
 
 ## Running the System
 
@@ -45,6 +61,7 @@ source venv/bin/activate
 To test the fraud detection model without MPI or the queue service:
 
 ```bash
+# On all platforms
 python test_fraud_detection.py --samples 20 --verbose
 ```
 
@@ -57,46 +74,57 @@ Options:
 To run the MPI service with mock data (no queue service required):
 
 ```bash
+# On macOS/Linux
 mpiexec -n 5 python fraud_detection_mpi.py --mock
-
 # or
 mpirun -n 5 python fraud_detection_mpi.py --mock
+
+# On Windows with Microsoft MPI
+mpiexec -n 5 python fraud_detection_mpi.py --mock
 ```
 
 To run the MPI service with the queue service:
 
 ```bash
-# First, start the queue service
+# First, start the queue service (all platforms)
 python queue_service.py
 
 # In another terminal, run the MPI service
+# On macOS/Linux
 mpirun -n 5 python fraud_detection_mpi.py
+
+# On Windows with Microsoft MPI
+mpiexec -n 5 python fraud_detection_mpi.py
 ```
 
 Options:
 - `-n`: Number of MPI processes to spawn
 - `--mock`: Use mock data instead of the queue service
-- `--processors`: Number of processors to use (default: 5)
+- `--queue-url`: Specify a custom queue service URL (default: http://localhost:8000)
+- `--single`: Run in single process mode (useful for debugging)
+- `--test`: Run in test mode to verify functionality
 
 ### 3. Running the UI
-- Queue Service Setup :
 
-- The queue service must be started first with specific host and port:
-  ```
-  python queue_service.py --host 127.0.0.1 
-  --port 8000
-  ```
+#### Queue Service Setup:
+
+```bash
+# All platforms
+python queue_service.py --host 127.0.0.1 --port 8000
+```
+
 - Verify it's running by checking http://localhost:8000/health
-- UI Configuration :
 
-- The UI should be started with debug mode disabled to prevent double browser windows:
-  ```
-  python fraud_detection_ui.py --no-debug
-  ```
-- Or for development with proper debug mode:
-  ```
-  python fraud_detection_ui.py --port 5000
-  ```
+#### UI Configuration:
+
+```bash
+# All platforms
+# For production use
+python fraud_detection_ui.py --no-debug
+
+# For development with proper debug mode
+python fraud_detection_ui.py --port 5000
+```
 
 The UI will be available at http://localhost:5000.
 
@@ -115,7 +143,11 @@ To test the complete system:
 
 2. Start the MPI service:
    ```bash
+   # On macOS/Linux
    mpirun -n 5 python fraud_detection_mpi.py
+   
+   # On Windows
+   mpiexec -n 5 python fraud_detection_mpi.py
    ```
 
 3. Start the UI:
