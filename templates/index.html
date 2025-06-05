@@ -285,10 +285,6 @@
             try {
                 isHealthy = await checkQueueHealth();
                 updateQueueStatus(isHealthy);
-                
-                if (!isHealthy) {
-                    alert('Queue service is offline. Your transaction will be stored locally but may not be processed until the queue service is back online.');
-                }
             } catch (error) {
                 console.error('Error checking queue health:', error);
             }
@@ -312,11 +308,13 @@
                     // Reset form
                     document.getElementById('transaction-form').reset();
                     
-                    // Show appropriate message based on queue service status
+                    // Log queue service status
                     if (!data.queue_service.healthy) {
-                        alert('Transaction saved locally. Queue service is offline, so it will be processed when the service is back online.');
+                        console.log('Transaction saved locally. Queue service is offline.');
                     } else if (!data.queue_service.success) {
-                        alert('Transaction saved locally but could not be sent to the queue service. It will be processed when the service is available.');
+                        console.log('Transaction saved locally but could not be sent to the queue service.');
+                    } else {
+                        console.log('Transaction submitted successfully to queue service.');
                     }
                 } else {
                     alert('Error: ' + data.error);
@@ -336,10 +334,6 @@
             try {
                 isHealthy = await checkQueueHealth();
                 updateQueueStatus(isHealthy);
-                
-                if (!isHealthy) {
-                    alert('Queue service is offline. Random transactions will be stored locally but may not be processed until the queue service is back online.');
-                }
             } catch (error) {
                 console.error('Error checking queue health:', error);
             }
@@ -358,9 +352,11 @@
                     data.transactions.forEach(tx => addTransaction(tx));
                     updateQueueStatus(data.queue_status.healthy);
                     
-                    // Show appropriate message based on queue service status
+                    // Log queue service status
                     if (!data.queue_status.healthy) {
-                        alert('Transactions saved locally. Queue service is offline, so they will be processed when the service is back online.');
+                        console.log('Random transactions saved locally. Queue service is offline.');
+                    } else {
+                        console.log('Random transactions submitted successfully to queue service.');
                     }
                 } else {
                     alert('Error: ' + data.error);

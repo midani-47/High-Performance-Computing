@@ -73,42 +73,16 @@ Options:
 
 **Important**: If you encounter MPI initialization errors on macOS, use single process mode instead.
 
-**For most users (recommended):**
-
-```bash
-# Single process mode (works on all systems)
-python fraud_detection_mpi.py --single --mock
-
-# With queue service
-python fraud_detection_mpi.py --single
-```
 
 **For systems with properly configured MPI:**
 
 ```bash
-# Test MPI configuration first
-python fraud_detection_mpi.py --test
-
-# If MPI test works, then run with mock data:
-# On macOS/Linux
-mpirun -n 5 python fraud_detection_mpi.py --mock
-
-# On Windows with Microsoft MPI
-mpiexec -n 5 python fraud_detection_mpi.py --mock
-```
-
-**Note**: If you see MPI initialization errors, this indicates OpenMPI configuration issues on your system. The application will automatically fall back to single process mode, but you should use the `--single` flag to avoid the error messages.
-
 To run the MPI service with the queue service:
 
 ```bash
 # First, start the queue service (all platforms)
 python queue_service.py
 
-# Recommended approach (single process mode)
-python fraud_detection_mpi.py --single
-
-# If MPI is properly configured (multi-process mode)
 # On macOS/Linux
 mpirun -n 5 python fraud_detection_mpi.py
 
@@ -116,15 +90,6 @@ mpirun -n 5 python fraud_detection_mpi.py
 mpiexec -n 5 python fraud_detection_mpi.py
 ```
 
-**If you encounter MPI errors on macOS**, use these alternative commands:
-
-```bash
-# Single process mode with queue service (recommended for macOS)
-python fraud_detection_mpi.py --single
-
-# Single process mode with mock data
-python fraud_detection_mpi.py --single --mock
-```
 
 Options:
 - `-n`: Number of MPI processes to spawn
@@ -147,12 +112,8 @@ python queue_service.py --host 127.0.0.1 --port 8000
 #### UI Configuration:
 
 ```bash
-# All platforms
-# For production use
-python fraud_detection_ui.py --no-debug
-
 # For development with proper debug mode
-python fraud_detection_ui.py --port 5000
+python fraud_detection_ui.py
 ```
 
 The UI will be available at http://localhost:5000.
@@ -165,19 +126,9 @@ Options:
 
 To test the complete system:
 
-1. **For macOS users (recommended):**
-   ```bash
-   # Start the queue service
-   python queue_service.py
-   
-   # In another terminal, start the fraud detection service
-   python fraud_detection_mpi.py --single
-   
-   # In a third terminal, start the UI
-   python fraud_detection_ui.py
-   ```
 
-2. **For systems with properly configured MPI:**
+
+1. **For systems with properly configured MPI:**
    ```bash
    # Start the queue service
    python queue_service.py

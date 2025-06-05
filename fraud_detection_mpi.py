@@ -86,31 +86,13 @@ def load_model(model_path=MODEL_PATH):
             print(f"Model loaded successfully, type: {type(model)}")
             return model
         else:
-            print(f"Model file {model_path} not found, using mock model")
-            return MockModel()
+            print(f"Model file {model_path} not found!")
+            print("Please ensure fraud_rf_model.pkl exists in the mpi/ directory")
+            sys.exit(1)
     except Exception as e:
         print(f"Error loading model: {e}")
         traceback.print_exc()
-        return MockModel()
-
-
-class MockModel:
-    """A mock model for fraud detection when the real model is not available"""
-    def __init__(self):
-        print("Initializing mock fraud detection model")
-        
-    def predict(self, X):
-        """Return mock predictions"""
-        n_samples = len(X)
-        # Generate random predictions (0 for not fraud, 1 for fraud)
-        # Bias towards not fraud (80% chance)
-        return np.array([0 if random.random() < 0.8 else 1 for _ in range(n_samples)])
-        
-    def predict_proba(self, X):
-        """Return mock probability predictions"""
-        n_samples = len(X)
-        # Generate random probabilities for each class (not fraud, fraud)
-        return np.array([[random.uniform(0.5, 0.99), random.uniform(0.01, 0.5)] for _ in range(n_samples)])
+        sys.exit(1)
 
 
 def preprocess_transaction(transaction):
