@@ -35,16 +35,16 @@ def check_queue_service_health():
     try:
         response = requests.get(f"{QUEUE_SERVICE_URL}/health", timeout=5)
         queue_service_status['healthy'] = response.status_code == 200
-        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
         return queue_service_status['healthy']
     except requests.exceptions.RequestException:
         queue_service_status['healthy'] = False
-        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
         return False
     except Exception as e:
         print(f"Unexpected error checking queue service health: {e}")
         queue_service_status['healthy'] = False
-        queue_service_status['last_checked'] = datetime.now(timezone.UTC).isoformat()
+        queue_service_status['last_checked'] = datetime.now(timezone.utc).isoformat()
         return False
 
 
@@ -164,7 +164,7 @@ def generate_mock_predictions():
             "prediction": is_fraud,
             "confidence": confidence,
             "model_version": "mock-1.0",
-            "timestamp": datetime.now(timezone.UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "processor_rank": -1,  # Indicates mock prediction
             "mock": True
         }
@@ -202,7 +202,7 @@ def submit_transaction():
             "amount": amount,
             "vendor_id": vendor_id,
             "status": status,
-            "timestamp": datetime.now(timezone.UTC).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         # Add to in-memory storage
@@ -246,7 +246,7 @@ def generate_random():
                 "amount": round(random.uniform(10.0, 1000.0), 2),
                 "vendor_id": random.randint(1, 100),
                 "status": random.choice(['submitted', 'accepted', 'rejected']),
-                "timestamp": datetime.now(timezone.UTC).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
             # Add to local storage

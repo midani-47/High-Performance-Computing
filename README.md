@@ -79,12 +79,24 @@ Options:
 - `--processors`: Number of processors to use (default: 5)
 
 ### 3. Running the UI
+- Queue Service Setup :
 
-To run the web-based UI:
+- The queue service must be started first with specific host and port:
+  ```
+  python queue_service.py --host 127.0.0.1 
+  --port 8000
+  ```
+- Verify it's running by checking http://localhost:8000/health
+- UI Configuration :
 
-```bash
-python fraud_detection_ui.py
-```
+- The UI should be started with debug mode disabled to prevent double browser windows:
+  ```
+  python fraud_detection_ui.py --no-debug
+  ```
+- Or for development with proper debug mode:
+  ```
+  python fraud_detection_ui.py --port 5000
+  ```
 
 The UI will be available at http://localhost:5000.
 
