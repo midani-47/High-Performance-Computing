@@ -27,12 +27,9 @@ MAX_EMPTY_ITERATIONS = 10  # Maximum number of iterations with no transactions b
 STATUSES = ['submitted', 'accepted', 'rejected']  # Transaction status values
 
 # MPI message tags
-TAGS = {
-    'EXIT': 0,  # Signal to exit
-    'IDLE': 1,  # Signal to wait
-    'WORK': 2,  # Signal to process work
-    'RESULT': 3  # Signal with result
-}
+WORK_TAG = 1
+DIE_TAG = 2
+RESULT_TAG = 3
 
 
 def check_queue_service_health():
@@ -311,6 +308,154 @@ def generate_mock_transaction():
     }
 
 
+class TransactionWork:
+    """Class to manage transaction work items"""
+    def __init__(self, use_mock_data=False):
+        self.use_mock_data = use_mock_data
+        self.transactions = []
+        self.empty_iterations = 0
+        self.max_transactions_per_minute = 5 if use_mock_data else float('inf')
+        self.last_transaction_time = time.time()
+        self.transaction_count = 0
+        
+    def get_next_batch(self, batch_size):
+        """Get the next batch of transactions"""
+        batch = []
+        
+        if self.use_mock_data:
+            # Generate mock transactions with rate limiting
+            for _ in range(batch_size):
+                current_time = time.time()
+                elapsed_time = current_time - self.last_transaction_time
+                min_time_between_transactions = 60.0 / self.max_transactions_per_minute
+                
+                if elapsed_time < min_time_between_transactions:
+                    break  # Don't generate more transactions yet
+                
+                transaction = generate_mock_transaction()
+                batch.append(transaction)
+                self.last_transaction_time = time.time()
+                self.transaction_count += 1
+                
+                if self.transaction_count % 10 == 0:
+                    print(f"Generated {self.transaction_count} transactions so far. Rate: {self.max_transactions_per_minute} per minute")
+        else:
+            # Fetch from real queue service
+            for _ in range(batch_size):
+                transaction = fetch_from_transaction_queue()
+                if transaction:
+                    batch.append(transaction)
+                    self.empty_iterations = 0
+                else:
+                    self.empty_iterations += 1
+                    break  # Stop if no more transactions
+        
+        return batch
+    
+    def should_continue(self):
+        """Check if we should continue processing"""
+        return self.empty_iterations < MAX_EMPTY_ITERATIONS
+
+
+def master_process(use_mock_data=False):
+    """Master process that distributes work to workers"""
+    comm = MPI.COMM_WORLD
+    size = comm.Get_size()
+    rank = comm.Get_rank()
+    
+    print(f"Master process {rank} started with {size-1} workers")
+    
+    # Initialize work manager
+    work_manager = TransactionWork(use_mock_data)
+    
+    # Keep track of results
+    all_predictions = []
+    
+    while work_manager.should_continue():
+        # Get a batch of transactions equal to the number of workers
+        batch_size = size - 1  # Exclude master process
+        transactions = work_manager.get_next_batch(batch_size)
+        
+        if not transactions:
+            print("No transactions available, waiting...")
+            time.sleep(2)
+            continue
+        
+        print(f"Master: Processing batch of {len(transactions)} transactions")
+        
+        # Send work to all available workers
+        for i, transaction in enumerate(transactions):
+            worker_rank = i + 1  # Workers are ranks 1, 2, 3, ...
+            if worker_rank < size:
+                print(f"Master: Sending transaction {transaction['transaction_id']} to worker {worker_rank}")
+                comm.send(transaction, dest=worker_rank, tag=WORK_TAG)
+        
+        # Collect results from workers
+        predictions_received = 0
+        status = MPI.Status()
+        
+        while predictions_received < len(transactions):
+            # Receive result from any worker
+            prediction = comm.recv(source=MPI.ANY_SOURCE, tag=RESULT_TAG, status=status)
+            worker_rank = status.Get_source()
+            
+            print(f"Master: Received prediction from worker {worker_rank}: {prediction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
+            
+            all_predictions.append(prediction)
+            predictions_received += 1
+            
+            # Send prediction to queue service if not using mock data
+            if not use_mock_data:
+                success = send_to_prediction_queue(prediction)
+                if not success:
+                    print(f"Master: Failed to send prediction {prediction['transaction_id']} to queue service")
+        
+        print(f"Master: Completed batch processing. Total predictions so far: {len(all_predictions)}")
+    
+    print(f"Master: Shutting down. Processed {len(all_predictions)} total predictions")
+    
+    # Send termination signal to all workers
+    for worker_rank in range(1, size):
+        print(f"Master: Sending termination signal to worker {worker_rank}")
+        comm.send(None, dest=worker_rank, tag=DIE_TAG)
+    
+    return all_predictions
+
+
+def worker_process():
+    """Worker process that processes transactions"""
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    
+    print(f"Worker {rank} started")
+    
+    # Load the fraud detection model
+    model = load_model()
+    
+    status = MPI.Status()
+    
+    while True:
+        # Wait for work or termination signal
+        data = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
+        
+        if status.Get_tag() == DIE_TAG:
+            print(f"Worker {rank}: Received termination signal")
+            break
+        elif status.Get_tag() == WORK_TAG:
+            transaction = data
+            print(f"Worker {rank}: Processing transaction {transaction['transaction_id']}")
+            
+            # Process the transaction
+            prediction = predict_fraud(model, transaction)
+            
+            print(f"Worker {rank}: Completed prediction for {transaction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
+            
+            # Send result back to master
+            comm.send(prediction, dest=0, tag=RESULT_TAG)
+    
+    print(f"Worker {rank}: Shutting down")
+
+
 def main_single_process(use_mock_data=False):
     """Run the fraud detection service in a single process"""
     print("Starting Fraud Detection Service in single process mode")
@@ -319,65 +464,35 @@ def main_single_process(use_mock_data=False):
     # Load the model
     model = load_model()
     
-    # Process transactions
-    empty_iterations = 0
+    # Initialize work manager
+    work_manager = TransactionWork(use_mock_data)
     transaction_count = 0
-    max_transactions_per_minute = 5  # Limit to 5 transactions per minute in mock mode
-    last_transaction_time = time.time()
     
-    while empty_iterations < MAX_EMPTY_ITERATIONS:
-        try:
-            # Get a transaction
-            if use_mock_data:
-                # Rate limit mock transaction generation
-                current_time = time.time()
-                elapsed_time = current_time - last_transaction_time
-                
-                # Calculate the minimum time between transactions to achieve the desired rate
-                min_time_between_transactions = 60.0 / max_transactions_per_minute
-                
-                if elapsed_time < min_time_between_transactions:
-                    # Wait until it's time to generate the next transaction
-                    time.sleep(min_time_between_transactions - elapsed_time)
-                
-                # Generate a mock transaction
-                transaction = generate_mock_transaction()
-                print(f"Generated mock transaction: {transaction['transaction_id']}")
-                last_transaction_time = time.time()
-                transaction_count += 1
-                
-                # Log transaction rate
-                if transaction_count % 10 == 0:
-                    print(f"Generated {transaction_count} transactions so far. Rate: {max_transactions_per_minute} per minute")
-            else:
-                # Fetch from the queue service
-                transaction = fetch_from_transaction_queue()
-                
-            if transaction:
-                print(f"Processing transaction: {transaction.get('transaction_id', 'unknown')}")
-                
-                # Predict fraud
-                prediction = predict_fraud(model, transaction)
-                print(f"Prediction: {prediction['prediction']} with confidence {prediction['confidence']}")
-                
-                # Send prediction result
-                if not use_mock_data:
-                    success = send_to_prediction_queue(prediction)
-                    if not success:
-                        print("Failed to send prediction to queue service")
-                
-                # Reset empty iterations counter
-                empty_iterations = 0
-            else:
-                print("No transaction available, waiting...")
-                empty_iterations += 1
-                time.sleep(2)  # Wait before trying again
-        except Exception as e:
-            print(f"Error in main loop: {e}")
-            traceback.print_exc()
-            time.sleep(2)  # Wait before trying again
+    while work_manager.should_continue():
+        # Get one transaction at a time in single process mode
+        transactions = work_manager.get_next_batch(1)
+        
+        if not transactions:
+            print("No transaction available, waiting...")
+            time.sleep(2)
+            continue
+        
+        transaction = transactions[0]
+        print(f"Processing transaction: {transaction.get('transaction_id', 'unknown')}")
+        
+        # Predict fraud
+        prediction = predict_fraud(model, transaction)
+        print(f"Prediction: {prediction['prediction']} with confidence {prediction['confidence']}")
+        
+        # Send prediction result
+        if not use_mock_data:
+            success = send_to_prediction_queue(prediction)
+            if not success:
+                print("Failed to send prediction to queue service")
+        
+        transaction_count += 1
     
-    print(f"Exiting after {MAX_EMPTY_ITERATIONS} empty iterations")
+    print(f"Exiting after processing {transaction_count} transactions")
 
 
 def main_mpi(use_mock_data=False):
@@ -386,127 +501,27 @@ def main_mpi(use_mock_data=False):
     rank = comm.Get_rank()
     size = comm.Get_size()
     
+    if size < 2:
+        print("MPI mode requires at least 2 processes (1 master + 1 worker)")
+        return
+    
     if rank == 0:
         # Master process
-        print(f"Starting Fraud Detection Service with {size} processes")
-        print(f"Using {'mock' if use_mock_data else 'real'} queue service")
+        all_predictions = master_process(use_mock_data)
+        print(f"Master: Final summary - Processed {len(all_predictions)} predictions")
         
-        # Track active workers
-        active_workers = 0
+        # Print summary of processor usage
+        processor_counts = {}
+        for pred in all_predictions:
+            proc_rank = pred.get('processor_rank', 'unknown')
+            processor_counts[proc_rank] = processor_counts.get(proc_rank, 0) + 1
         
-        # Process transactions
-        empty_iterations = 0
-        transaction_count = 0
-        max_transactions_per_minute = 5  # Limit to 5 transactions per minute in mock mode
-        last_transaction_time = time.time()
-        
-        while empty_iterations < MAX_EMPTY_ITERATIONS:
-            try:
-                # Check for results from workers
-                if active_workers > 0:
-                    for i in range(1, size):
-                        if comm.Iprobe(source=i, tag=TAGS['RESULT']):
-                            prediction = comm.recv(source=i, tag=TAGS['RESULT'])
-                            print(f"Received prediction from worker {i}: {prediction['prediction']} with confidence {prediction['confidence']}")
-                            
-                            # Send prediction result to queue service
-                            if not use_mock_data:
-                                success = send_to_prediction_queue(prediction)
-                                if not success:
-                                    print("Failed to send prediction to queue service")
-                            
-                            active_workers -= 1
-                
-                # Assign work to idle workers
-                if active_workers < size - 1:
-                    # Get a transaction
-                    if use_mock_data:
-                        # Rate limit mock transaction generation
-                        current_time = time.time()
-                        elapsed_time = current_time - last_transaction_time
-                        
-                        # Calculate the minimum time between transactions to achieve the desired rate
-                        min_time_between_transactions = 60.0 / max_transactions_per_minute
-                        
-                        if elapsed_time < min_time_between_transactions:
-                            # Wait until it's time to generate the next transaction
-                            time.sleep(min_time_between_transactions - elapsed_time)
-                        
-                        # Generate a mock transaction
-                        transaction = generate_mock_transaction()
-                        print(f"Generated mock transaction: {transaction['transaction_id']}")
-                        last_transaction_time = time.time()
-                        transaction_count += 1
-                        
-                        # Log transaction rate
-                        if transaction_count % 10 == 0:
-                            print(f"Generated {transaction_count} transactions so far. Rate: {max_transactions_per_minute} per minute")
-                    else:
-                        # Fetch from the queue service
-                        transaction = fetch_from_transaction_queue()
-                    
-                    if transaction:
-                        # Find an idle worker
-                        for i in range(1, size):
-                            if not comm.Iprobe(source=i, tag=TAGS['RESULT']):
-                                # Send work to this worker
-                                comm.send(transaction, dest=i, tag=TAGS['WORK'])
-                                print(f"Sent transaction {transaction.get('transaction_id', 'unknown')} to worker {i}")
-                                active_workers += 1
-                                break
-                    else:
-                        print("No transaction available, waiting...")
-                        empty_iterations += 1
-                        time.sleep(2)  # Wait before trying again
-                else:
-                    # All workers are busy, wait for results
-                    time.sleep(0.1)
-            except Exception as e:
-                print(f"Error in master process: {e}")
-                traceback.print_exc()
-                time.sleep(2)  # Wait before trying again
-        
-        print(f"Exiting after {MAX_EMPTY_ITERATIONS} empty iterations")
-        
-        # Signal all workers to exit
-        for i in range(1, size):
-            comm.send(None, dest=i, tag=TAGS['EXIT'])
+        print("Processor usage summary:")
+        for proc_rank, count in sorted(processor_counts.items()):
+            print(f"  Processor {proc_rank}: {count} predictions")
     else:
         # Worker process
-        print(f"Worker {rank} started")
-        
-        # Load the model
-        model = load_model()
-        
-        # Process transactions sent by the master
-        while True:
-            try:
-                # Check for exit signal
-                if comm.Iprobe(source=0, tag=TAGS['EXIT']):
-                    comm.recv(source=0, tag=TAGS['EXIT'])
-                    print(f"Worker {rank} received exit signal")
-                    break
-                
-                # Check for work
-                if comm.Iprobe(source=0, tag=TAGS['WORK']):
-                    transaction = comm.recv(source=0, tag=TAGS['WORK'])
-                    print(f"Worker {rank} received transaction: {transaction.get('transaction_id', 'unknown')}")
-                    
-                    # Predict fraud
-                    prediction = predict_fraud(model, transaction)
-                    print(f"Worker {rank} prediction: {prediction['prediction']} with confidence {prediction['confidence']}")
-                    
-                    # Send result back to master
-                    comm.send(prediction, dest=0, tag=TAGS['RESULT'])
-                else:
-                    # No work available, wait
-                    time.sleep(0.1)
-            except Exception as e:
-                print(f"Error in worker {rank}: {e}")
-                traceback.print_exc()
-                time.sleep(1)  # Wait before trying again
-        
-        print(f"Worker {rank} exiting")
+        worker_process()
 
 
 def test_mode():
@@ -536,7 +551,7 @@ if __name__ == "__main__":
         print("Starting fraud detection service...")
         parser = argparse.ArgumentParser(description="Fraud Detection Service")
         parser.add_argument("--mock", action="store_true", help="Use mock data instead of real queue service")
-        parser.add_argument("--np", type=int, default=4, help="Number of processors to use (for MPI mode)")
+        parser.add_argument("--np", type=int, default=5, help="Number of processors to use (for MPI mode)")
         parser.add_argument("--single", action="store_true", help="Run in single process mode")
         parser.add_argument("--queue-url", type=str, help="URL of the queue service")
         parser.add_argument("--test", action="store_true", help="Run in test mode to verify functionality")
@@ -547,8 +562,6 @@ if __name__ == "__main__":
         
         # Override queue service URL if provided
         if args.queue_url:
-            # Modify the module-level variable directly
-            # No need for global declaration in the main block
             QUEUE_SERVICE_URL = args.queue_url
             print(f"Using queue service at: {QUEUE_SERVICE_URL}")
         
@@ -558,7 +571,7 @@ if __name__ == "__main__":
             sys.exit(0)
         
         # Check if queue service is healthy
-        if not args.mock and not check_queue_service_health():
+        if not args.mock and not args.single and not check_queue_service_health():
             print(f"Queue service at {QUEUE_SERVICE_URL} is not healthy. Please start the queue service first.")
             sys.exit(1)
         
