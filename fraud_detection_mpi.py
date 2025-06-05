@@ -14,7 +14,12 @@ import pandas as pd
 import requests
 import joblib  # Add joblib import
 from datetime import datetime, timezone
-from mpi4py import MPI
+
+# Global MPI variables - will be set when MPI is initialized
+MPI = None
+comm = None
+rank = None
+size = None
 
 # Constants
 QUEUE_SERVICE_URL = 'http://localhost:8000'  # Default, can be overridden by command line
@@ -30,6 +35,27 @@ STATUSES = ['submitted', 'accepted', 'rejected']  # Transaction status values
 WORK_TAG = 1
 DIE_TAG = 2
 RESULT_TAG = 3
+
+
+def initialize_mpi():
+    """Initialize MPI environment and return success status"""
+    global MPI, comm, rank, size
+    try:
+        from mpi4py import MPI as mpi_module
+        MPI = mpi_module
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+        return True
+    except Exception as e:
+        print(f"Failed to initialize MPI: {e}")
+        return False
+
+
+def is_running_under_mpi():
+    """Check if we're running under mpirun/mpiexec"""
+    return any('mpi' in env_var.lower() for env_var in os.environ.keys() 
+               if env_var.startswith(('OMPI_', 'PMI_', 'MPICH_', 'MV2_')))
 
 
 def check_queue_service_health():
@@ -166,7 +192,10 @@ def predict_fraud(model, transaction):
             print(f"Confidence: {confidence}")
             
             # Get the MPI rank for the processor
-            rank = MPI.COMM_WORLD.Get_rank()
+            if rank is not None:
+                processor_rank = rank
+            else:
+                processor_rank = 0  # Single process mode
             
             # Create prediction result
             result = {
@@ -175,7 +204,7 @@ def predict_fraud(model, transaction):
                 "confidence": confidence,
                 "model_version": "fraud-rf-1.0",
                 "timestamp": datetime.utcnow().isoformat(),
-                "processor_rank": rank
+                "processor_rank": processor_rank
             }
             
             return result
@@ -193,7 +222,7 @@ def predict_fraud(model, transaction):
             "confidence": 0.0,
             "model_version": "error",
             "timestamp": datetime.utcnow().isoformat(),
-            "processor_rank": MPI.COMM_WORLD.Get_rank()
+            "processor_rank": rank if rank is not None else 0
         }
 
 
@@ -359,9 +388,9 @@ class TransactionWork:
 
 def master_process(use_mock_data=False):
     """Master process that distributes work to workers"""
-    comm = MPI.COMM_WORLD
-    size = comm.Get_size()
-    rank = comm.Get_rank()
+    if comm is None:
+        print("Error: MPI not initialized")
+        return []
     
     print(f"Master process {rank} started with {size-1} workers")
     
@@ -424,13 +453,18 @@ def master_process(use_mock_data=False):
 
 def worker_process():
     """Worker process that processes transactions"""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
+    if comm is None:
+        print("Error: MPI not initialized")
+        return
     
     print(f"Worker {rank} started")
     
     # Load the fraud detection model
     model = load_model()
+    
+    if MPI is None:
+        print("Error: MPI module not available")
+        return
     
     status = MPI.Status()
     
@@ -497,9 +531,10 @@ def main_single_process(use_mock_data=False):
 
 def main_mpi(use_mock_data=False):
     """Run the fraud detection service using MPI"""
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    if not initialize_mpi():
+        print("Failed to initialize MPI, falling back to single process mode")
+        main_single_process(use_mock_data)
+        return
     
     if size < 2:
         print("MPI mode requires at least 2 processes (1 master + 1 worker)")
@@ -528,8 +563,14 @@ def test_mode():
     """Simple test function to verify the script is running"""
     print("\n\n==== TEST MODE ====\n")
     print("This is a test to verify the script is running correctly.")
-    print(f"MPI Rank: {MPI.COMM_WORLD.Get_rank()}")
-    print(f"MPI Size: {MPI.COMM_WORLD.Get_size()}")
+    
+    # Try to initialize MPI for testing
+    if initialize_mpi():
+        print(f"MPI Rank: {rank}")
+        print(f"MPI Size: {size}")
+    else:
+        print("MPI not available, running in single process mode")
+    
     print("\nGenerating a mock transaction:")
     transaction = generate_mock_transaction()
     print(json.dumps(transaction, indent=2))
@@ -575,13 +616,32 @@ if __name__ == "__main__":
             print(f"Queue service at {QUEUE_SERVICE_URL} is not healthy. Please start the queue service first.")
             sys.exit(1)
         
-        # Run in single process mode if requested or if only one process is available
-        if args.single or MPI.COMM_WORLD.Get_size() == 1:
+        # Determine execution mode
+        if args.single:
             print("Running in single process mode")
             main_single_process(args.mock)
         else:
-            print("Running in MPI mode")
-            main_mpi(args.mock)
+            # Check if we're running under mpirun but MPI is failing
+            if is_running_under_mpi():
+                # We're under mpirun, try to initialize MPI
+                if initialize_mpi():
+                    if size == 1:
+                        print("Only one MPI process available, running in single process mode")
+                        main_single_process(args.mock)
+                    else:
+                        print("Running in MPI mode")
+                        main_mpi(args.mock)
+                else:
+                    print("MPI initialization failed. Consider using: python fraud_detection_mpi.py --single --mock")
+                    sys.exit(1)
+            else:
+                # Not under mpirun, try to initialize MPI anyway
+                if initialize_mpi() and size > 1:
+                    print("Running in MPI mode")
+                    main_mpi(args.mock)
+                else:
+                    print("MPI not available or only one process, running in single process mode")
+                    main_single_process(args.mock)
     except Exception as e:
         print(f"Error in main: {e}")
         traceback.print_exc()

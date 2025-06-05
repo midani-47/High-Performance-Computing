@@ -71,17 +71,33 @@ Options:
 
 ### 2. Running the MPI Service
 
-To run the MPI service with mock data (no queue service required):
+**Important**: If you encounter MPI initialization errors on macOS, use single process mode instead.
+
+**For most users (recommended):**
 
 ```bash
+# Single process mode (works on all systems)
+python fraud_detection_mpi.py --single --mock
+
+# With queue service
+python fraud_detection_mpi.py --single
+```
+
+**For systems with properly configured MPI:**
+
+```bash
+# Test MPI configuration first
+python fraud_detection_mpi.py --test
+
+# If MPI test works, then run with mock data:
 # On macOS/Linux
-mpiexec -n 5 python fraud_detection_mpi.py --mock
-# or
 mpirun -n 5 python fraud_detection_mpi.py --mock
 
 # On Windows with Microsoft MPI
 mpiexec -n 5 python fraud_detection_mpi.py --mock
 ```
+
+**Note**: If you see MPI initialization errors, this indicates OpenMPI configuration issues on your system. The application will automatically fall back to single process mode, but you should use the `--single` flag to avoid the error messages.
 
 To run the MPI service with the queue service:
 
@@ -89,7 +105,10 @@ To run the MPI service with the queue service:
 # First, start the queue service (all platforms)
 python queue_service.py
 
-# In another terminal, run the MPI service
+# Recommended approach (single process mode)
+python fraud_detection_mpi.py --single
+
+# If MPI is properly configured (multi-process mode)
 # On macOS/Linux
 mpirun -n 5 python fraud_detection_mpi.py
 
@@ -97,11 +116,21 @@ mpirun -n 5 python fraud_detection_mpi.py
 mpiexec -n 5 python fraud_detection_mpi.py
 ```
 
+**If you encounter MPI errors on macOS**, use these alternative commands:
+
+```bash
+# Single process mode with queue service (recommended for macOS)
+python fraud_detection_mpi.py --single
+
+# Single process mode with mock data
+python fraud_detection_mpi.py --single --mock
+```
+
 Options:
 - `-n`: Number of MPI processes to spawn
 - `--mock`: Use mock data instead of the queue service
 - `--queue-url`: Specify a custom queue service URL (default: http://localhost:8000)
-- `--single`: Run in single process mode (useful for debugging)
+- `--single`: Run in single process mode (useful for debugging and systems with MPI issues)
 - `--test`: Run in test mode to verify functionality
 
 ### 3. Running the UI
@@ -136,26 +165,35 @@ Options:
 
 To test the complete system:
 
-1. Start the queue service:
+1. **For macOS users (recommended):**
    ```bash
+   # Start the queue service
    python queue_service.py
+   
+   # In another terminal, start the fraud detection service
+   python fraud_detection_mpi.py --single
+   
+   # In a third terminal, start the UI
+   python fraud_detection_ui.py
    ```
 
-2. Start the MPI service:
+2. **For systems with properly configured MPI:**
    ```bash
+   # Start the queue service
+   python queue_service.py
+   
+   # In another terminal, start the MPI service
    # On macOS/Linux
    mpirun -n 5 python fraud_detection_mpi.py
    
    # On Windows
    mpiexec -n 5 python fraud_detection_mpi.py
-   ```
-
-3. Start the UI:
-   ```bash
+   
+   # In a third terminal, start the UI
    python fraud_detection_ui.py
    ```
 
-4. Use the UI to submit transactions and view prediction results
+3. Use the UI to submit transactions and view prediction results
 
 ## Queue Service API
 
@@ -171,6 +209,29 @@ All API calls require an Authorization header with a Bearer token:
 ```
 Authorization: Bearer mock_token
 ```
+
+## Troubleshooting
+
+### MPI Issues on macOS
+
+If you encounter MPI initialization errors like:
+```
+It looks like MPI_INIT failed for some reason...
+PML add procs failed
+```
+
+**Solution**: Use single process mode instead:
+```bash
+# Instead of: mpirun -n 5 python fraud_detection_mpi.py --mock
+# Use:
+python fraud_detection_mpi.py --single --mock
+```
+
+### Common Issues
+
+1. **Queue service not responding**: Ensure the queue service is running on port 8000
+2. **Model file not found**: The fraud detection model should be in `mpi/fraud_rf_model.pkl`
+3. **Permission errors**: Ensure the `a3/queue_data/` directory exists and is writable
 
 ## Documentation
 
