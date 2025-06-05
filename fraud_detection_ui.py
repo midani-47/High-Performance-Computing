@@ -137,70 +137,14 @@ def fetch_from_prediction_queue():
                 print(f"Retrying in {RETRY_DELAY} seconds...")
                 time.sleep(RETRY_DELAY)
             else:
-                print("Max retries reached. Giving up.")
-                # If all retries fail, generate mock predictions for any transactions without predictions
-                return generate_mock_predictions()
+                print("Max retries reached. Queue service unavailable.")
+                return []
         except Exception as e:
             print(f"Unexpected error fetching predictions: {e}")
             traceback.print_exc()
-            # If exception occurs, generate mock predictions
-            return generate_mock_predictions()
-    
-    # If no predictions were fetched and all retries failed, generate mock predictions
-    if not results:
-        return generate_mock_predictions()
+            return []
     
     return results
-
-
-def generate_mock_predictions():
-    """Generate mock predictions for transactions that don't have predictions yet"""
-    mock_results = []
-    
-    # Find transactions without predictions
-    prediction_tx_ids = {p["transaction_id"] for p in predictions}
-    unpredicted_txs = [tx for tx in transactions if tx["transaction_id"] not in prediction_tx_ids]
-    
-    for i, tx in enumerate(unpredicted_txs):
-        # Generate a mock prediction
-        is_fraud = random.random() < 0.2  # 20% chance of fraud
-        confidence = random.uniform(0.6, 0.99) if is_fraud else random.uniform(0.7, 0.99)
-        
-        # Assign processor rank in round-robin fashion (simulating multiple processors)
-        processor_rank = (i % 4) + 1  # Use processors 1-4
-        
-        prediction = {
-            "transaction_id": tx["transaction_id"],
-            "prediction": is_fraud,
-            "confidence": confidence,
-            "model_version": "mock-1.0",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "processor_rank": processor_rank,
-            "mock": True
-        }
-        
-        mock_results.append(prediction)
-        
-        # Also try to push to prediction queue if queue service is healthy
-        if check_queue_service_health():
-            try:
-                headers = {"Authorization": "Bearer mock_token", "Content-Type": "application/json"}
-                message = {
-                    "content": prediction,
-                    "message_type": "prediction"
-                }
-                response = requests.post(
-                    f"{QUEUE_SERVICE_URL}/api/queues/{PREDICTION_QUEUE}/push",
-                    headers=headers,
-                    json=message,
-                    timeout=5
-                )
-                if response.status_code == 201:
-                    print(f"Mock prediction stored in queue: {prediction['transaction_id']}")
-            except Exception as e:
-                print(f"Failed to store mock prediction in queue: {e}")
-    
-    return mock_results
 
 
 @app.route('/')

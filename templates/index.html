@@ -37,10 +37,6 @@
         .fraud-false {
             color: #28a745;
         }
-        .mock-prediction {
-            font-style: italic;
-            opacity: 0.8;
-        }
         .queue-status {
             display: inline-block;
             padding: 5px 10px;
@@ -148,7 +144,7 @@
                     <div class="card-body" style="max-height: 300px; overflow-y: auto;">
                         <div id="predictions-container">
                             {% for pred in predictions %}
-                            <div class="prediction-item{% if pred.mock %} mock-prediction{% endif %}" data-id="{{ pred.transaction_id }}">
+                            <div class="prediction-item" data-id="{{ pred.transaction_id }}">
                                 <div><strong>Transaction ID:</strong> {{ pred.transaction_id }}</div>
                                 <div>
                                     <strong>Fraud:</strong> 
@@ -159,7 +155,6 @@
                                 <div><strong>Confidence:</strong> {{ "%.2f"|format(pred.confidence*100) }}%</div>
                                 <div><strong>Model:</strong> {{ pred.model_version }}</div>
                                 <div><strong>Processor:</strong> {{ pred.processor_rank }}</div>
-                                {% if pred.mock %}<div><em>(Mock Prediction)</em></div>{% endif %}
                             </div>
                             {% else %}
                             <div id="no-predictions">No predictions yet.</div>
@@ -247,9 +242,6 @@
             
             const predElement = document.createElement('div');
             predElement.className = 'prediction-item';
-            if (prediction.mock) {
-                predElement.className += ' mock-prediction';
-            }
             predElement.dataset.id = prediction.transaction_id;
             
             const fraudClass = prediction.prediction ? 'fraud-true' : 'fraud-false';
@@ -266,7 +258,6 @@
                 <div><strong>Confidence:</strong> ${confidencePercent}%</div>
                 <div><strong>Model:</strong> ${prediction.model_version}</div>
                 <div><strong>Processor:</strong> ${prediction.processor_rank}</div>
-                ${prediction.mock ? '<div><em>(Mock Prediction)</em></div>' : ''}
             `;
             
             container.appendChild(predElement);
