@@ -64,19 +64,12 @@ To test the fraud detection model without MPI or the queue service:
 # On all platforms
 python test_fraud_detection.py --samples 20 --verbose
 ```
-
 Options:
 - `--samples`: Number of test samples to process (default: 10)
 - `--verbose`: Show detailed output for each transaction
 
-### 2. Running the MPI Service
+### 2. Running service
 
-**Important**: If you encounter MPI initialization errors on macOS, use single process mode instead.
-
-
-**For systems with properly configured MPI:**
-
-```bash
 To run the MPI service with the queue service:
 
 ```bash
@@ -90,7 +83,6 @@ mpirun -n 5 python fraud_detection_mpi.py
 mpiexec -n 5 python fraud_detection_mpi.py
 ```
 
-
 Options:
 - `-n`: Number of MPI processes to spawn
 - `--mock`: Use mock data instead of the queue service
@@ -99,17 +91,6 @@ Options:
 - `--test`: Run in test mode to verify functionality
 
 ### 3. Running the UI
-
-#### Queue Service Setup:
-
-```bash
-# All platforms
-python queue_service.py --host 127.0.0.1 --port 8000
-```
-
-- Verify it's running by checking http://localhost:8000/health
-
-#### UI Configuration:
 
 ```bash
 # For development with proper debug mode
@@ -125,8 +106,6 @@ Options:
 ## Testing End-to-End
 
 To test the complete system:
-
-
 
 1. **For systems with properly configured MPI:**
    ```bash
