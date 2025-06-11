@@ -9,6 +9,7 @@ import random
 import pickle
 import argparse
 import traceback
+import signal
 import numpy as np
 import pandas as pd
 import requests
@@ -31,10 +32,26 @@ RETRY_DELAY = 2  # Delay between retries in seconds
 MAX_EMPTY_ITERATIONS = 10  # Maximum number of iterations with no transactions before exiting
 STATUSES = ['submitted', 'accepted', 'rejected']  # Transaction status values
 
+# Global variables for graceful shutdown
+shutdown_requested = False
+
 # MPI message tags
 WORK_TAG = 1
 DIE_TAG = 2
 RESULT_TAG = 3
+
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully"""
+    global shutdown_requested
+    print("\n^CReceived signal 2, shutting down gracefully...")
+    shutdown_requested = True
+
+
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
 
 def initialize_mpi():
@@ -185,7 +202,7 @@ def predict_fraud(model, transaction):
                 "prediction": prediction,
                 "confidence": confidence,
                 "model_version": "fraud-rf-1.0",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "processor_rank": processor_rank
             }
             
@@ -203,7 +220,7 @@ def predict_fraud(model, transaction):
             "prediction": False,
             "confidence": 0.0,
             "model_version": "error",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "processor_rank": rank if rank is not None else 0
         }
 
@@ -315,7 +332,7 @@ def generate_mock_transaction():
         "amount": amount,
         "vendor_id": vendor_id,
         "status": status,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -365,16 +382,20 @@ class TransactionWork:
     
     def should_continue(self):
         """Check if we should continue processing"""
-        return self.empty_iterations < MAX_EMPTY_ITERATIONS
+        global shutdown_requested
+        return self.empty_iterations < MAX_EMPTY_ITERATIONS and not shutdown_requested
 
 
 def master_process(use_mock_data=False):
     """Master process that distributes work to workers"""
+    global shutdown_requested
+    
     if comm is None:
         print("Error: MPI not initialized")
         return []
     
-    print(f"Master process {rank} started with {size-1} workers")
+    num_workers = size - 1  # Total workers available
+    print(f"Master process {rank} started with {num_workers} workers")
     
     # Initialize work manager
     work_manager = TransactionWork(use_mock_data)
@@ -382,59 +403,84 @@ def master_process(use_mock_data=False):
     # Keep track of results
     all_predictions = []
     
-    while work_manager.should_continue():
+    while work_manager.should_continue() and not shutdown_requested:
         # Get a batch of transactions equal to the number of workers
-        batch_size = size - 1  # Exclude master process
+        batch_size = num_workers  # Use all available workers
         transactions = work_manager.get_next_batch(batch_size)
         
         if not transactions:
+            if shutdown_requested:
+                break
             print("No transactions available, waiting...")
             time.sleep(2)
             continue
         
         print(f"Master: Processing batch of {len(transactions)} transactions")
         
-        # Send work to all available workers
+        # Send work to workers (only up to the number of available workers)
+        tasks_sent = 0
         for i, transaction in enumerate(transactions):
-            worker_rank = i + 1  # Workers are ranks 1, 2, 3, ...
-            if worker_rank < size:
-                print(f"Master: Sending transaction {transaction['transaction_id']} to worker {worker_rank}")
-                comm.send(transaction, dest=worker_rank, tag=WORK_TAG)
+            if i >= num_workers:  # Don't exceed available workers
+                break
+            worker_rank = (i % num_workers) + 1  # Round-robin assignment to workers 1, 2, ..., num_workers
+            print(f"Master: Sending transaction {transaction['transaction_id']} to worker {worker_rank}")
+            comm.send(transaction, dest=worker_rank, tag=WORK_TAG)
+            tasks_sent += 1
         
         # Collect results from workers
         predictions_received = 0
         status = MPI.Status()
         
-        while predictions_received < len(transactions):
+        while predictions_received < tasks_sent and not shutdown_requested:
             # Receive result from any worker
-            prediction = comm.recv(source=MPI.ANY_SOURCE, tag=RESULT_TAG, status=status)
-            worker_rank = status.Get_source()
-            
-            print(f"Master: Received prediction from worker {worker_rank}: {prediction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
-            
-            all_predictions.append(prediction)
-            predictions_received += 1
-            
-            # Send prediction to queue service if not using mock data
-            if not use_mock_data:
-                success = send_to_prediction_queue(prediction)
-                if not success:
-                    print(f"Master: Failed to send prediction {prediction['transaction_id']} to queue service")
+            try:
+                prediction = comm.recv(source=MPI.ANY_SOURCE, tag=RESULT_TAG, status=status)
+                worker_rank = status.Get_source()
+                
+                print(f"Master: Received prediction from worker {worker_rank}: {prediction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
+                
+                all_predictions.append(prediction)
+                predictions_received += 1
+                
+                # Send prediction to queue service if not using mock data
+                if not use_mock_data:
+                    success = send_to_prediction_queue(prediction)
+                    if success:
+                        print(f"Prediction sent successfully: {prediction['transaction_id']}")
+                    else:
+                        print(f"Master: Failed to send prediction {prediction['transaction_id']} to queue service")
+            except Exception as e:
+                if shutdown_requested:
+                    break
+                print(f"Error receiving prediction: {e}")
+        
+        # If we have remaining transactions that couldn't be processed, put them back
+        if len(transactions) > tasks_sent:
+            remaining_transactions = transactions[tasks_sent:]
+            print(f"Master: {len(remaining_transactions)} transactions remain for next batch")
         
         print(f"Master: Completed batch processing. Total predictions so far: {len(all_predictions)}")
+        
+        if shutdown_requested:
+            break
     
     print(f"Master: Shutting down. Processed {len(all_predictions)} total predictions")
     
     # Send termination signal to all workers
     for worker_rank in range(1, size):
         print(f"Master: Sending termination signal to worker {worker_rank}")
-        comm.send(None, dest=worker_rank, tag=DIE_TAG)
+        try:
+            comm.send(None, dest=worker_rank, tag=DIE_TAG)
+        except Exception as e:
+            print(f"Error sending termination signal to worker {worker_rank}: {e}")
     
     return all_predictions
 
 
 def worker_process():
     """Worker process that processes transactions"""
+    global shutdown_requested
+    
     if comm is None:
         print("Error: MPI not initialized")
         return
@@ -450,30 +496,37 @@ def worker_process():
     
     status = MPI.Status()
     
-    while True:
-        # Wait for work or termination signal
-        data = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
-        
-        if status.Get_tag() == DIE_TAG:
-            print(f"Worker {rank}: Received termination signal")
-            break
-        elif status.Get_tag() == WORK_TAG:
-            transaction = data
-            print(f"Worker {rank}: Processing transaction {transaction['transaction_id']}")
+    while not shutdown_requested:
+        try:
+            # Wait for work or termination signal
+            data = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
             
-            # Process the transaction
-            prediction = predict_fraud(model, transaction)
-            
-            print(f"Worker {rank}: Completed prediction for {transaction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
-            
-            # Send result back to master
-            comm.send(prediction, dest=0, tag=RESULT_TAG)
+            if status.Get_tag() == DIE_TAG:
+                print(f"Worker {rank}: Received termination signal")
+                break
+            elif status.Get_tag() == WORK_TAG:
+                transaction = data
+                print(f"Worker {rank}: Processing transaction {transaction['transaction_id']}")
+                
+                # Process the transaction
+                prediction = predict_fraud(model, transaction)
+                
+                print(f"Worker {rank}: Completed prediction for {transaction['transaction_id']} -> {prediction['prediction']} (confidence: {prediction['confidence']:.3f})")
+                
+                # Send result back to master
+                comm.send(prediction, dest=0, tag=RESULT_TAG)
+        except Exception as e:
+            if shutdown_requested:
+                break
+            print(f"Worker {rank}: Error processing transaction: {e}")
     
     print(f"Worker {rank}: Shutting down")
 
 
 def main_single_process(use_mock_data=False):
     """Run the fraud detection service in a single process"""
+    global shutdown_requested
+    
     print("Starting Fraud Detection Service in single process mode")
     print(f"Using {'mock' if use_mock_data else 'real'} queue service")
     
@@ -484,11 +537,13 @@ def main_single_process(use_mock_data=False):
     work_manager = TransactionWork(use_mock_data)
     transaction_count = 0
     
-    while work_manager.should_continue():
+    while work_manager.should_continue() and not shutdown_requested:
         # Get one transaction at a time in single process mode
         transactions = work_manager.get_next_batch(1)
         
         if not transactions:
+            if shutdown_requested:
+                break
             print("No transaction available, waiting...")
             time.sleep(2)
             continue
@@ -503,10 +558,15 @@ def main_single_process(use_mock_data=False):
         # Send prediction result
         if not use_mock_data:
             success = send_to_prediction_queue(prediction)
-            if not success:
+            if success:
+                print(f"Prediction sent successfully: {prediction['transaction_id']}")
+            else:
                 print("Failed to send prediction to queue service")
         
         transaction_count += 1
+        
+        if shutdown_requested:
+            break
     
     print(f"Exiting after processing {transaction_count} transactions")
 
@@ -571,17 +631,20 @@ if __name__ == "__main__":
     import traceback
     
     try:
+        # Setup signal handlers
+        setup_signal_handlers()
+        
         print("Starting fraud detection service...")
         parser = argparse.ArgumentParser(description="Fraud Detection Service")
         parser.add_argument("--mock", action="store_true", help="Use mock data instead of real queue service")
-        parser.add_argument("--np", type=int, default=5, help="Number of processors to use (for MPI mode)")
+        parser.add_argument("--np", type=int, default=5, help="Number of processors to spawn (default: 5)")
         parser.add_argument("--single", action="store_true", help="Run in single process mode")
         parser.add_argument("--queue-url", type=str, help="URL of the queue service")
         parser.add_argument("--test", action="store_true", help="Run in test mode to verify functionality")
         
         args = parser.parse_args()
         
-        print(f"Arguments parsed: mock={args.mock}, single={args.single}, test={args.test}")
+        print(f"Arguments parsed: mock={args.mock}, single={args.single}, test={args.test}, np={args.np}")
         
         # Override queue service URL if provided
         if args.queue_url:
@@ -593,7 +656,7 @@ if __name__ == "__main__":
             test_mode()
             sys.exit(0)
         
-        # Check if queue service is healthy
+        # Check if queue service is healthy (only if not using mock data and not in single mode)
         if not args.mock and not args.single and not check_queue_service_health():
             print(f"Queue service at {QUEUE_SERVICE_URL} is not healthy. Please start the queue service first.")
             sys.exit(1)
@@ -603,9 +666,40 @@ if __name__ == "__main__":
             print("Running in single process mode")
             main_single_process(args.mock)
         else:
-            # Check if we're running under mpirun but MPI is failing
-            if is_running_under_mpi():
-                # We're under mpirun, try to initialize MPI
+            # Check if we need to start MPI processes
+            if not is_running_under_mpi():
+                # We're not running under mpirun/mpiexec, so start MPI processes
+                print(f"Starting MPI with {args.np} processes...")
+                import subprocess
+                
+                # Construct the mpiexec command
+                cmd = [
+                    "mpiexec", "-n", str(args.np), 
+                    sys.executable, __file__
+                ]
+                
+                # Add original arguments (except --np since we're handling it)
+                if args.mock:
+                    cmd.append("--mock")
+                if args.queue_url:
+                    cmd.extend(["--queue-url", args.queue_url])
+                if args.test:
+                    cmd.append("--test")
+                
+                print(f"Executing: {' '.join(cmd)}")
+                
+                try:
+                    # Run the MPI command
+                    subprocess.run(cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"MPI execution failed: {e}")
+                    print("Falling back to single process mode...")
+                    main_single_process(args.mock)
+                except KeyboardInterrupt:
+                    print("\n^CReceived signal 2, shutting down gracefully...")
+                    sys.exit(0)
+            else:
+                # We're already running under MPI, initialize and proceed
                 if initialize_mpi():
                     if size == 1:
                         print("Only one MPI process available, running in single process mode")
@@ -616,14 +710,11 @@ if __name__ == "__main__":
                 else:
                     print("MPI initialization failed. Consider using: python fraud_detection_mpi.py --single --mock")
                     sys.exit(1)
-            else:
-                # Not under mpirun, try to initialize MPI anyway
-                if initialize_mpi() and size > 1:
-                    print("Running in MPI mode")
-                    main_mpi(args.mock)
-                else:
-                    print("MPI not available or only one process, running in single process mode")
-                    main_single_process(args.mock)
+                    
+    except KeyboardInterrupt:
+        print("\n^CReceived signal 2, shutting down gracefully...")
+        sys.exit(0)
     except Exception as e:
         print(f"Error in main: {e}")
         traceback.print_exc()
+        sys.exit(1)

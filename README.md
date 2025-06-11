@@ -40,55 +40,45 @@ This project implements a distributed fraud detection system using MPI (Message 
 
 3. Install Python dependencies:
    ```bash
-   pip install mpi4py scikit-learn pandas numpy requests flask
+   pip install -r requirements.txt
    ```
 
-4. Create the queue data directory:
-   ```bash
-   # On macOS/Linux
-   mkdir -p a3/queue_data
-   
-   # On Windows
-   mkdir a3\queue_data
-   ```
-   
-   This directory will store the transaction queue (TQ1.json) and prediction queue (PQ1.json) files.
+
 
 ## Running the System
 
-### 1. Testing the Fraud Detection Model
-
-To test the fraud detection model without MPI or the queue service:
-
-```bash
-# On all platforms
-python test_fraud_detection.py --samples 20 --verbose
-```
-Options:
-- `--samples`: Number of test samples to process (default: 10)
-- `--verbose`: Show detailed output for each transaction
-
-### 2. Running service
+### 1. Running queue service
 
 To run the MPI service with the queue service:
 
 ```bash
 # First, start the queue service (all platforms)
 python queue_service.py
-
-# On macOS/Linux
-mpirun -n 5 python fraud_detection_mpi.py
-
-# On Windows with Microsoft MPI
-mpiexec -n 5 python fraud_detection_mpi.py
 ```
 
+### 2. Running fraud detection service (Default: 5 processors)
+
+```bash
+# Default: Start with 5 processors (1 master + 4 workers)
+python fraud_detection_mpi.py
+
+# Custom number of processors
+python fraud_detection_mpi.py --np 8
+
+# With mock data (for testing)
+python fraud_detection_mpi.py --mock
+
+# Single process mode (no MPI)
+python fraud_detection_mpi.py --single
+```
+
+**Important**: The system defaults to 5 processors when you run `python fraud_detection_mpi.py`. You don't need to use `mpiexec -n 5` anymore.
+
 Options:
-- `-n`: Number of MPI processes to spawn
-- `--mock`: Use mock data instead of the queue service
-- `--queue-url`: Specify a custom queue service URL (default: http://localhost:8000)
-- `--single`: Run in single process mode (useful for debugging and systems with MPI issues)
-- `--test`: Run in test mode to verify functionality
+- `--np`: Number of MPI processes to spawn (default: 5)
+- `--mock`: Use mock data instead of queue service
+- `--single`: Force single process mode
+- `--queue-url`: Custom queue service URL
 
 ### 3. Running the UI
 
@@ -112,15 +102,23 @@ To test the complete system:
    # Start the queue service
    python queue_service.py
    
-   # In another terminal, start the MPI service
-   # On macOS/Linux
-   mpirun -n 5 python fraud_detection_mpi.py
+   # In another terminal, start the fraud detection service (default 5 processors)
+   python fraud_detection_mpi.py
    
-   # On Windows
-   mpiexec -n 5 python fraud_detection_mpi.py
+   # Or with custom processor count
+   python fraud_detection_mpi.py --np 8
    
    # In a third terminal, start the UI
    python fraud_detection_ui.py
+   ```
+
+2. **For testing without queue service:**
+   ```bash
+   # Test with mock data
+   python fraud_detection_mpi.py --mock
+   
+   # Test single process mode
+   python fraud_detection_mpi.py --single --mock
    ```
 
 3. Use the UI to submit transactions and view prediction results
@@ -150,11 +148,21 @@ It looks like MPI_INIT failed for some reason...
 PML add procs failed
 ```
 
-**Solution**: Use single process mode instead:
+**This is expected behavior**: The system will automatically fall back to single process mode and continue working correctly. The fraud detection functionality is preserved.
+
+**Preferred approach on macOS**:
 ```bash
-# Instead of: mpirun -n 5 python fraud_detection_mpi.py --mock
-# Use:
+# Single process mode (recommended for macOS)
 python fraud_detection_mpi.py --single --mock
+```
+
+**For systems with working MPI** (Linux/Windows):
+```bash
+# Will automatically start 5 processes
+python fraud_detection_mpi.py --mock
+
+# Custom processor count
+python fraud_detection_mpi.py --np 8 --mock
 ```
 
 ### Common Issues
@@ -162,6 +170,15 @@ python fraud_detection_mpi.py --single --mock
 1. **Queue service not responding**: Ensure the queue service is running on port 8000
 2. **Model file not found**: The fraud detection model should be in `mpi/fraud_rf_model.pkl`
 3. **Permission errors**: Ensure the `a3/queue_data/` directory exists and is writable
+4. **Graceful shutdown**: Use Ctrl+C to stop the service gracefully - you'll see "^CReceived signal 2, shutting down gracefully..."
+
+### Signal Handling
+
+The fraud detection service supports graceful shutdown:
+- **Ctrl+C (SIGINT)**: Triggers graceful shutdown with message "^CReceived signal 2, shutting down gracefully..."
+- **SIGTERM**: Also triggers graceful shutdown
+- All MPI processes will be properly terminated
+- In-progress transactions will complete before shutdown
 
 ## Documentation
 
