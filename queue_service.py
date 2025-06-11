@@ -261,14 +261,35 @@ if __name__ == "__main__":
             print(f"Created queue: {queue_name}")
     
     print(f"Queue Service running on http://{args.host}:{args.port}")
+    
+    # Custom signal handler for Flask
+    def graceful_shutdown(signum, frame):
+        print(f"\n^CReceived signal {signum}, shutting down gracefully...")
+        import threading
+        import time
+        def delayed_exit():
+            time.sleep(0.1)  # Give Flask time to finish current requests
+            os._exit(0)  # Force exit
+        threading.Thread(target=delayed_exit).start()
+    
+    # Override Flask's signal handling
+    signal.signal(signal.SIGINT, graceful_shutdown)
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    
     try:
-        # Run Flask app with improved configuration
+        # Run Flask app with proper signal handling
         app.run(
             host=args.host,
             port=args.port,
-            debug=True,  # Keep debug mode for development
+            debug=False,  # Disable debug mode for proper signal handling
             use_reloader=False  # Disable reloader to prevent duplicate processes
         )
+    except KeyboardInterrupt:
+        print("\n^CReceived signal 2, shutting down gracefully...")
+        sys.exit(0)
+    except SystemExit:
+        print("\n^CReceived signal 2, shutting down gracefully...")
+        sys.exit(0)
     except Exception as e:
         print(f"Error starting Queue Service: {e}")
         traceback.print_exc()

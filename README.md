@@ -218,3 +218,12 @@ The fraud detection service supports graceful shutdown:
 ## Documentation
 
 For detailed technical documentation, please refer to [DOCUMENTATION.md](DOCUMENTATION.md).
+
+### **IMPORTANT: Recent Fixes Applied**
+
+✅ **`--np` Flag Fixed**: The `--np` flag now properly limits processor counts
+- `--np 2`: Shows processor ranks 1-2 (not 1-4)
+- `--np 3`: Shows processor ranks 1-3 (not 1-4)  
+- `--np 5`: Shows processor ranks 1-5 (default)
+
+✅ **Queue Service Signal Handling Fixed**: Queue service now responds to Ctrl+C gracefully

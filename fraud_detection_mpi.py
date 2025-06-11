@@ -34,6 +34,7 @@ STATUSES = ['submitted', 'accepted', 'rejected']  # Transaction status values
 
 # Global variables for graceful shutdown
 shutdown_requested = False
+num_processors = 5  # Default number of processors, can be overridden by --np flag
 
 # MPI message tags
 WORK_TAG = 1
@@ -201,7 +202,8 @@ def predict_fraud(model, transaction):
             else:
                 # In single process mode or master process, simulate worker distribution
                 _processor_counter += 1
-                processor_rank = (_processor_counter % 4) + 1  # Simulate ranks 1-4
+                # Simulate the specified number of processors (don't subtract 1 in single process mode)
+                processor_rank = (_processor_counter % num_processors) + 1
             
             # Create prediction result
             result = {
@@ -223,7 +225,7 @@ def predict_fraud(model, transaction):
         traceback.print_exc()
         # Return a default prediction
         _processor_counter += 1
-        processor_rank = (_processor_counter % 4) + 1 if rank is None or rank == 0 else rank
+        processor_rank = (_processor_counter % num_processors) + 1 if rank is None or rank == 0 else rank
         
         return {
             "transaction_id": transaction.get("transaction_id", "unknown"),
@@ -642,7 +644,11 @@ if __name__ == "__main__":
         
         args = parser.parse_args()
         
+        # Update global num_processors with the --np argument
+        num_processors = args.np
+        
         print(f"Arguments parsed: mock={args.mock}, single={args.single}, test={args.test}, np={args.np}")
+        print(f"Configured for {num_processors} processors")
         
         # Override queue service URL if provided
         if args.queue_url:
