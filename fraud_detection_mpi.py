@@ -361,9 +361,9 @@ class TransactionWork:
         batch = []
         
         if self.use_mock_data:
-            # In mock mode, don't automatically generate transactions
-            # Only return empty batch - transactions should come from UI
-            print("Mock mode: Waiting for transactions from UI (not auto-generating)")
+            # In mock mode, NEVER auto-generate transactions
+            # Only wait for user-submitted transactions from the UI
+            print("Mock mode: Waiting for user-submitted transactions from UI (no auto-generation)")
             return []
         else:
             # Fetch from real queue service
@@ -410,7 +410,7 @@ def master_process(use_mock_data=False):
             if shutdown_requested:
                 break
             print("No transactions available, waiting...")
-            time.sleep(2)
+            time.sleep(10)  # Increased from 2 to 10 seconds to reduce queue service load
             continue
         
         print(f"Master: Processing batch of {len(transactions)} transactions")
@@ -543,7 +543,7 @@ def main_single_process(use_mock_data=False):
             if shutdown_requested:
                 break
             print("No transaction available, waiting...")
-            time.sleep(2)
+            time.sleep(10)  # Increased from 2 to 10 seconds to reduce queue service load
             continue
         
         transaction = transactions[0]
@@ -654,20 +654,18 @@ if __name__ == "__main__":
             test_mode()
             sys.exit(0)
         
-        # Check if queue service is healthy (only if not using mock data and not in single mode)
-        if not args.mock and not args.single and not check_queue_service_health():
-            print(f"Queue service at {QUEUE_SERVICE_URL} is not healthy. Please start the queue service first.")
-            sys.exit(1)
-        
-        # Determine execution mode
+        # Determine execution mode with better fallback logic
         if args.single:
-            print("Running in single process mode")
+            print("Running in single process mode (forced)")
             main_single_process(args.mock)
         else:
+            # Try MPI first, but fall back gracefully
+            mpi_failed = False
+            
             # Check if we need to start MPI processes
             if not is_running_under_mpi():
-                # We're not running under mpirun/mpiexec, so start MPI processes
-                print(f"Starting MPI with {args.np} processes...")
+                # We're not running under mpirun/mpiexec, so try to start MPI processes
+                print(f"Attempting to start MPI with {args.np} processes...")
                 import subprocess
                 
                 # Construct the mpiexec command
@@ -687,27 +685,37 @@ if __name__ == "__main__":
                 print(f"Executing: {' '.join(cmd)}")
                 
                 try:
-                    # Run the MPI command
-                    subprocess.run(cmd, check=True)
-                except subprocess.CalledProcessError as e:
+                    # Run the MPI command with timeout
+                    result = subprocess.run(cmd, check=True, timeout=10)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
                     print(f"MPI execution failed: {e}")
-                    print("Falling back to single process mode...")
-                    main_single_process(args.mock)
+                    mpi_failed = True
                 except KeyboardInterrupt:
                     print("\n^CReceived signal 2, shutting down gracefully...")
                     sys.exit(0)
             else:
-                # We're already running under MPI, initialize and proceed
-                if initialize_mpi():
-                    if size == 1:
-                        print("Only one MPI process available, running in single process mode")
-                        main_single_process(args.mock)
-                    else:
-                        print("Running in MPI mode")
-                        main_mpi(args.mock)
+                # We're already running under MPI, try to initialize
+                if not initialize_mpi():
+                    print("MPI initialization failed")
+                    mpi_failed = True
+                elif size == 1:
+                    print("Only one MPI process available, using single process mode")
+                    main_single_process(args.mock)
                 else:
-                    print("MPI initialization failed. Consider using: python fraud_detection_mpi.py --single --mock")
-                    sys.exit(1)
+                    print(f"Running in MPI mode with {size} processes")
+                    # Check queue service health only if not in mock mode
+                    if not args.mock and not check_queue_service_health():
+                        print(f"Queue service at {QUEUE_SERVICE_URL} is not healthy. Please start the queue service first.")
+                        sys.exit(1)
+                    main_mpi(args.mock)
+            
+            # If MPI failed, fall back to single process mode
+            if mpi_failed:
+                print("============================================")
+                print("MPI not available - falling back to single process mode")
+                print("This is normal on macOS and other systems without MPI")
+                print("============================================")
+                main_single_process(args.mock)
                     
     except KeyboardInterrupt:
         print("\n^CReceived signal 2, shutting down gracefully...")

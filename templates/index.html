@@ -405,7 +405,7 @@
             }
         });
         
-        // Auto-check for predictions every 5 seconds
+        // Auto-check for predictions every 30 seconds (reduced from 5 seconds)
         setInterval(async () => {
             try {
                 // First check queue service health directly
@@ -420,20 +420,23 @@
                     updateQueueStatus(false);
                 }
                 
-                // Then check for new predictions
-                const response = await fetch('/check_predictions', {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                if (data.success) {
-                    data.new_predictions.forEach(pred => addPrediction(pred));
-                    updateQueueStatus(data.queue_status.healthy);
+                // Then check for new predictions only if predictions section is visible
+                const predictionsSection = document.getElementById('predictions-section');
+                if (predictionsSection && predictionsSection.style.display !== 'none') {
+                    const response = await fetch('/check_predictions', {
+                        method: 'POST'
+                    });
+                    
+                    const data = await response.json();
+                    if (data.success) {
+                        data.new_predictions.forEach(pred => addPrediction(pred));
+                        updateQueueStatus(data.queue_status.healthy);
+                    }
                 }
             } catch (error) {
                 console.error('Error auto-checking predictions:', error);
             }
-        }, 5000);
+        }, 30000); // Changed from 5000ms to 30000ms
     </script>
 </body>
 </html>
