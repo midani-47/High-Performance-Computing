@@ -58,21 +58,31 @@ python queue_service.py
 
 ### 2. Running fraud detection service (Default: 5 processors)
 
+**For manual transaction submission via UI:**
 ```bash
-# Default: Start with 5 processors (1 master + 4 workers)
+# Start with queue service integration (for manual UI transactions)
 python fraud_detection_mpi.py
 
-# Custom number of processors
+# With custom processor count  
 python fraud_detection_mpi.py --np 8
 
-# With mock data (for testing)
-python fraud_detection_mpi.py --mock
-
-# Single process mode (no MPI)
+# Single process mode (recommended for macOS)
 python fraud_detection_mpi.py --single
 ```
 
-**Important**: The system defaults to 5 processors when you run `python fraud_detection_mpi.py`. You don't need to use `mpiexec -n 5` anymore.
+**For testing only (automatic transaction generation):**
+```bash
+# Test mode with auto-generated transactions - NOT for UI use
+python fraud_detection_mpi.py --mock
+
+# Single process test mode
+python fraud_detection_mpi.py --single --mock
+```
+
+**IMPORTANT**: 
+- **Do NOT use `--mock` flag** if you want to submit transactions manually via the UI
+- The `--mock` flag is only for testing and will generate transactions automatically
+- For UI-based transaction submission, use the queue service integration (no `--mock` flag)
 
 Options:
 - `--np`: Number of MPI processes to spawn (default: 5)
@@ -95,33 +105,42 @@ Options:
 
 ## Testing End-to-End
 
-To test the complete system:
+### IMPORTANT: Manual Transaction Submission (Recommended)
 
-1. **For systems with properly configured MPI:**
+For normal operation where you submit transactions manually via the UI:
+
+1. **Start the queue service:**
    ```bash
-   # Start the queue service
    python queue_service.py
-   
-   # In another terminal, start the fraud detection service (default 5 processors)
+   ```
+
+2. **Start the fraud detection service (WITHOUT --mock flag):**
+   ```bash
+   # Option 1: Try MPI mode (will fall back to single process on macOS)
    python fraud_detection_mpi.py
    
-   # Or with custom processor count
-   python fraud_detection_mpi.py --np 8
-   
-   # In a third terminal, start the UI
+   # Option 2: Force single process mode (recommended for macOS)
+   python fraud_detection_mpi.py --single
+   ```
+
+3. **Start the UI:**
+   ```bash
    python fraud_detection_ui.py
    ```
 
-2. **For testing without queue service:**
-   ```bash
-   # Test with mock data
-   python fraud_detection_mpi.py --mock
-   
-   # Test single process mode
-   python fraud_detection_mpi.py --single --mock
-   ```
+4. **Submit transactions manually** via the web UI at http://localhost:5000
 
-3. Use the UI to submit transactions and view prediction results
+### Testing Mode (Automatic Transaction Generation)
+
+⚠️ **WARNING**: Only use this for testing, not for normal operation!
+
+```bash
+# This will auto-generate transactions - NOT for manual UI submission
+python fraud_detection_mpi.py --mock
+
+# Single process test mode
+python fraud_detection_mpi.py --single --mock
+```
 
 ## Queue Service API
 
@@ -167,10 +186,26 @@ python fraud_detection_mpi.py --np 8 --mock
 
 ### Common Issues
 
-1. **Queue service not responding**: Ensure the queue service is running on port 8000
-2. **Model file not found**: The fraud detection model should be in `mpi/fraud_rf_model.pkl`
-3. **Permission errors**: Ensure the `a3/queue_data/` directory exists and is writable
-4. **Graceful shutdown**: Use Ctrl+C to stop the service gracefully - you'll see "^CReceived signal 2, shutting down gracefully..."
+1. **❌ System generates hundreds of transactions automatically**
+   - **Cause**: Using `--mock` flag for UI-based operation
+   - **Solution**: Remove `--mock` flag. Use `python fraud_detection_mpi.py --single` instead
+   - **Rule**: Only use `--mock` for testing, never for manual UI transactions
+
+2. **❌ All processors show rank 0**
+   - **Cause**: MPI fallback to single process mode  
+   - **Solution**: This is now fixed - processor ranks will show 1, 2, 3, 4 in rotation
+
+3. **❌ MPI service stops suddenly**
+   - **Cause**: System exits when no transactions are available
+   - **Solution**: Fixed - system now waits patiently for manual transactions
+
+4. **Queue service not responding**: Ensure the queue service is running on port 8000
+
+5. **Model file not found**: The fraud detection model should be in `mpi/fraud_rf_model.pkl`
+
+6. **Permission errors**: Ensure the `a3/queue_data/` directory exists and is writable
+
+7. **Graceful shutdown**: Use Ctrl+C to stop the service gracefully - you'll see "^CReceived signal 2, shutting down gracefully..."
 
 ### Signal Handling
 

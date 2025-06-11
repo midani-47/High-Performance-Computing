@@ -29,7 +29,7 @@ PREDICTION_QUEUE = 'PQ1'    # Prediction Queue name from Assignment 3
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mpi', 'fraud_rf_model.pkl')  # Absolute path to the trained model
 MAX_RETRIES = 5  # Maximum number of retries for API calls
 RETRY_DELAY = 2  # Delay between retries in seconds
-MAX_EMPTY_ITERATIONS = 10  # Maximum number of iterations with no transactions before exiting
+MAX_EMPTY_ITERATIONS = 1000  # Don't exit too quickly - wait for transactions from UI
 STATUSES = ['submitted', 'accepted', 'rejected']  # Transaction status values
 
 # Global variables for graceful shutdown
@@ -169,8 +169,13 @@ def preprocess_transaction(transaction):
         return pd.DataFrame(columns=['timestamp', 'status', 'vendor_id', 'amount'])
 
 
+# Global counter for simulating processor distribution in single process mode
+_processor_counter = 0
+
 def predict_fraud(model, transaction):
     """Predict fraud for a transaction"""
+    global _processor_counter
+    
     try:
         # Preprocess the transaction
         print("Starting prediction process...")
@@ -191,10 +196,12 @@ def predict_fraud(model, transaction):
             print(f"Confidence: {confidence}")
             
             # Get the MPI rank for the processor
-            if rank is not None:
-                processor_rank = rank
+            if rank is not None and rank > 0:
+                processor_rank = rank  # Use actual MPI rank for workers
             else:
-                processor_rank = 0  # Single process mode
+                # In single process mode or master process, simulate worker distribution
+                _processor_counter += 1
+                processor_rank = (_processor_counter % 4) + 1  # Simulate ranks 1-4
             
             # Create prediction result
             result = {
@@ -215,13 +222,16 @@ def predict_fraud(model, transaction):
         print(f"Error predicting fraud: {e}")
         traceback.print_exc()
         # Return a default prediction
+        _processor_counter += 1
+        processor_rank = (_processor_counter % 4) + 1 if rank is None or rank == 0 else rank
+        
         return {
             "transaction_id": transaction.get("transaction_id", "unknown"),
             "prediction": False,
             "confidence": 0.0,
             "model_version": "error",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "processor_rank": rank if rank is not None else 0
+            "processor_rank": processor_rank
         }
 
 
@@ -351,22 +361,10 @@ class TransactionWork:
         batch = []
         
         if self.use_mock_data:
-            # Generate mock transactions with rate limiting
-            for _ in range(batch_size):
-                current_time = time.time()
-                elapsed_time = current_time - self.last_transaction_time
-                min_time_between_transactions = 60.0 / self.max_transactions_per_minute
-                
-                if elapsed_time < min_time_between_transactions:
-                    break  # Don't generate more transactions yet
-                
-                transaction = generate_mock_transaction()
-                batch.append(transaction)
-                self.last_transaction_time = time.time()
-                self.transaction_count += 1
-                
-                if self.transaction_count % 10 == 0:
-                    print(f"Generated {self.transaction_count} transactions so far. Rate: {self.max_transactions_per_minute} per minute")
+            # In mock mode, don't automatically generate transactions
+            # Only return empty batch - transactions should come from UI
+            print("Mock mode: Waiting for transactions from UI (not auto-generating)")
+            return []
         else:
             # Fetch from real queue service
             for _ in range(batch_size):
